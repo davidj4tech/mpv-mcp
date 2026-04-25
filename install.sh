@@ -24,12 +24,32 @@ install -m 755 "$REPO/server.js"   "$APP_DIR/server.js"
 install -m 644 "$REPO/package.json" "$APP_DIR/package.json"
 ( cd "$APP_DIR" && npm install --no-audit --no-fund --silent )
 
-# 2. Core services
+# 2. Core services. Wrap svlogger with an LOGDIR-exporting shim — without it,
+# svlogger crash-loops on root fs (mkdir /sv/<svc> on RO root) when runsvdir
+# is launched by Termux:Boot rather than an interactive shell. That tight loop
+# pegs CPU, overheats the device, and on some phones triggers reboots.
+write_log_wrapper() {
+  cat > "$1" <<EOF
+#!$PREFIX/bin/sh
+export LOGDIR=$PREFIX/var/log
+exec $PREFIX/share/termux-services/svlogger
+EOF
+  chmod +x "$1"
+}
 for svc in mpv mpv-tts mpv-mcp; do
   mkdir -p "$SVDIR/$svc/log"
   install -m 755 "$REPO/services/$svc/run" "$SVDIR/$svc/run"
-  ln -sfn "$PREFIX/share/termux-services/svlogger" "$SVDIR/$svc/log/run"
+  write_log_wrapper "$SVDIR/$svc/log/run"
 done
+
+# Also patch ~/.termux/boot/start-services (idempotent) so LOGDIR is exported
+# at the runsvdir level. Belt and braces with the per-service wrappers.
+BOOT="$HOME/.termux/boot/start-services"
+if [ -f "$BOOT" ] && ! grep -q 'LOGDIR=' "$BOOT"; then
+  cp "$BOOT" "$BOOT.bak"
+  awk -v p="$PREFIX" '/^runsvdir/{print "export LOGDIR="p"/var/log"} {print}' "$BOOT.bak" > "$BOOT"
+  chmod +x "$BOOT"
+fi
 
 # 3. agent-audio-relay (optional — only if the source checkout is present)
 RELAY_INSTALLED=0
@@ -41,7 +61,7 @@ if [ -d "$RELAY_SRC" ] && [ -f "$RELAY_SRC/pyproject.toml" ]; then
   command -v edge-tts    >/dev/null 2>&1 || pip install --user --break-system-packages edge-tts
   mkdir -p "$SVDIR/agent-audio-relay/log"
   install -m 755 "$REPO/services/agent-audio-relay/run" "$SVDIR/agent-audio-relay/run"
-  ln -sfn "$PREFIX/share/termux-services/svlogger" "$SVDIR/agent-audio-relay/log/run"
+  write_log_wrapper "$SVDIR/agent-audio-relay/log/run"
 
   # Claude TTS Stop hook from the relay (provides edge-tts → drop into watch dir)
   mkdir -p "$HOME/.claude"
