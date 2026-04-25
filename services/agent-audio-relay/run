@@ -1,0 +1,20 @@
+#!/data/data/com.termux/files/usr/bin/sh
+exec 2>&1
+SOCK="$PREFIX/tmp/mpv-tts.sock"
+i=0
+while [ $i -lt 30 ]; do
+  [ -S "$SOCK" ] && break
+  i=$((i+1)); sleep 1
+done
+
+mkdir -p "$HOME/.cache/agent-audio-relay/tts-claude" "$HOME/.cache/agent-audio-relay/queue"
+
+export RELAY_BACKEND=mpv
+export RELAY_MPV_SOCKET="$SOCK"
+export RELAY_MPV_WAIT=1
+export RELAY_WATCH_DIRS="$HOME/.cache/agent-audio-relay"
+export RELAY_QUEUE_DIR="$HOME/.cache/agent-audio-relay/queue"
+export RELAY_STATE_FILE="$HOME/.cache/agent-audio-relay/delivered.txt"
+export RELAY_PAD_SILENCE=1
+
+exec "$HOME/.local/bin/agent-audio-relay"

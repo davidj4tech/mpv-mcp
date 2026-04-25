@@ -50,24 +50,28 @@ function mpv(channel, cmd) {
 // Watch DUCKERS for idle-active. While any are non-idle, lower PRIMARY volume.
 const duckers = new Set();         // set of channel names currently non-idle
 let savedPrimaryVol = null;        // primary volume captured before first duck
+let duckLock = Promise.resolve();  // serialize applyDuck() so concurrent events can't race
 
-async function applyDuck() {
-  if (duckers.size === 0) {
-    if (savedPrimaryVol != null) {
-      const restore = savedPrimaryVol;
-      savedPrimaryVol = null;
-      try { await mpv(PRIMARY, ["set_property", "volume", restore]); console.log(`unduck: ${PRIMARY} -> ${restore}`); }
-      catch (e) { console.error("unduck failed:", e.message); }
+function applyDuck() {
+  duckLock = duckLock.then(async () => {
+    if (duckers.size === 0) {
+      if (savedPrimaryVol != null) {
+        const restore = savedPrimaryVol;
+        savedPrimaryVol = null;
+        try { await mpv(PRIMARY, ["set_property", "volume", restore]); console.log(`unduck: ${PRIMARY} -> ${restore}`); }
+        catch (e) { console.error("unduck failed:", e.message); }
+      }
+    } else {
+      if (savedPrimaryVol == null) {
+        try {
+          savedPrimaryVol = await mpv(PRIMARY, ["get_property", "volume"]) ?? CHANNELS[PRIMARY].baseline;
+          await mpv(PRIMARY, ["set_property", "volume", CHANNELS[PRIMARY].duck]);
+          console.log(`duck: ${PRIMARY} ${savedPrimaryVol} -> ${CHANNELS[PRIMARY].duck}`);
+        } catch (e) { console.error("duck failed:", e.message); savedPrimaryVol = null; }
+      }
     }
-  } else {
-    if (savedPrimaryVol == null) {
-      try {
-        savedPrimaryVol = await mpv(PRIMARY, ["get_property", "volume"]) ?? CHANNELS[PRIMARY].baseline;
-        await mpv(PRIMARY, ["set_property", "volume", CHANNELS[PRIMARY].duck]);
-        console.log(`duck: ${PRIMARY} ${savedPrimaryVol} -> ${CHANNELS[PRIMARY].duck}`);
-      } catch (e) { console.error("duck failed:", e.message); savedPrimaryVol = null; }
-    }
-  }
+  }).catch(() => {});
+  return duckLock;
 }
 
 function watchDucker(name) {

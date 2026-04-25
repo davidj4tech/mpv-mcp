@@ -2,4 +2,5 @@
 exec 2>&1
 SOCK="$PREFIX/tmp/mpv-tts.sock"
 rm -f "$SOCK"
-exec mpv --idle=yes --force-window=no --input-ipc-server="$SOCK" --volume=100 --keep-open=no
+# --ao=openal so we don't fight the music daemon for OpenSL ES exclusively.
+exec mpv --idle=yes --ao=openal --force-window=no --input-ipc-server="$SOCK" --volume=100 --keep-open=no
