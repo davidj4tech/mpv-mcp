@@ -76,9 +76,9 @@ claude mcp add --scope user --transport http mpv http://100.94.14.59:8765/mcp
 "mcp": { "mpv": { "type": "remote", "url": "http://100.94.14.59:8765/mcp", "enabled": true } }
 ```
 
-**OpenClaw:**
+**OpenClaw:** (note: `transport` is required — openclaw HTTP defaults to SSE, this server speaks streamable-http)
 ```sh
-openclaw mcp set mpv '{"url":"http://100.94.14.59:8765/mcp"}'
+openclaw mcp set mpv '{"url":"http://100.94.14.59:8765/mcp","transport":"streamable-http"}'
 ```
 
 ## MCP tools
