@@ -1,0 +1,5 @@
+#!/data/data/com.termux/files/usr/bin/sh
+exec 2>&1
+SOCK="$PREFIX/tmp/mpv.sock"
+rm -f "$SOCK"
+exec mpv --idle=yes --force-window=no --input-ipc-server="$SOCK" --ytdl=yes --volume=60
