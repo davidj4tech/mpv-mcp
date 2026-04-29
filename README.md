@@ -34,10 +34,17 @@ When the **tts** channel is non-idle the server **ducks** the **music** channel 
 
 All three runtimes (Claude Code, OpenCode, OpenClaw) connect with the same URL: `http://<tailscale-ip>:8765/mcp`.
 
+## See also
+
+- [agent-audio-relay](https://github.com/davidj4tech/agent-audio-relay) —
+  the Python relay that delivers Claude Code / Codex / aider TTS clips
+  into this server's `mpv-tts` channel via the
+  `RELAY_TERMUX_PLAYER=mpv-ipc` backend.
+
 ## Install (Termux)
 
 ```sh
-git clone <repo> ~/projects/mpv-mcp
+git clone https://github.com/davidj4tech/mpv-mcp.git ~/projects/mpv-mcp
 cd ~/projects/mpv-mcp
 ./install.sh
 ```
