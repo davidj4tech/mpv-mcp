@@ -87,7 +87,40 @@ openclaw mcp set mpv '{"url":"http://100.94.14.59:8765/mcp","transport":"streama
 
 ## Web UI
 
-`http://<tailscale-ip>:8765/` — both channels stacked, volumes, transport, ducked badge.
+`http://<tailscale-ip>:8765/` — both channels stacked, volumes, transport,
+ducked badge.
+
+**Installable as a PWA.** The page serves `/manifest.webmanifest` + an
+SVG icon and the right `apple-mobile-web-app-*` meta tags, so on Android
+Chrome → ⋮ → "Add to Home screen" gives you a fullscreen launcher icon.
+
+**Keyboard shortcuts (mpv-style).** Click a channel to focus it (border
+highlights, current channel shown next to the title). Shortcuts skip
+when the URL field has focus.
+
+| Keys                          | Action                                |
+|-------------------------------|---------------------------------------|
+| `Space` / `k` / `p`           | play/pause (Space on idle TTS plays the latest clip) |
+| `←` / `→`                     | seek ±5s (Shift = ±1s)                |
+| `↑` / `↓` and `9` / `0`       | volume ±2                             |
+| `m`                           | mute toggle                           |
+| `<` / `>`                     | playlist prev / next                  |
+| `[` / `]`                     | speed ±0.1                            |
+| `Backspace`                   | reset speed to 1.0                    |
+| `Tab`                         | switch focused channel                |
+
+**TTS-specific buttons.** The `tts` row also has a `Latest` button that
+loads `~/.cache/agent-audio/latest.mp3` (override with the
+`TTS_LATEST_PATH` env var on the server) and ⏯ behaves the same way on
+an idle channel.
+
+### HTTP API
+
+The web UI is a thin client over `/api/state` (GET-style POST returning
+JSON snapshots) and `/api/cmd` (`{channel, name, args}`). Commands:
+`play`, `queue`, `pause`, `resume`, `stop`, `skip`, `prev`, `seek`,
+`volume`, `play_latest`, `volume_delta`, `mute_toggle`, `speed_delta`,
+`speed_set`.
 
 ## Operations
 
