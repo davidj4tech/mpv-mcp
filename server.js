@@ -8,11 +8,10 @@ import { z } from "zod";
 
 const PREFIX = process.env.PREFIX || "";
 const CHANNELS = {
-  music: { socket: process.env.MPV_MUSIC_SOCKET || `${PREFIX}/tmp/mpv.sock`,    baseline: 60,  duck: 15  },
-  tts:   { socket: process.env.MPV_TTS_SOCKET   || `${PREFIX}/tmp/mpv-tts.sock`, baseline: 100, duck: 100 },
+  music: { socket: process.env.MPV_MUSIC_SOCKET || `${PREFIX}/tmp/mpv-music.sock`, baseline: 50  },
+  voice: { socket: process.env.MPV_VOICE_SOCKET || `${PREFIX}/tmp/mpv-voice.sock`, baseline: 85  },
+  tts:   { socket: process.env.MPV_TTS_SOCKET   || `${PREFIX}/tmp/mpv-tts.sock`,   baseline: 100 },
 };
-const PRIMARY = "music";
-const DUCKERS = ["tts"];
 const PORT = Number(process.env.PORT || 8765);
 const HOST = process.env.HOST || "0.0.0.0";
 const TTS_LATEST = process.env.TTS_LATEST_PATH
@@ -48,38 +47,35 @@ function mpv(channel, cmd) {
   });
 }
 
-// --- Ducking ---------------------------------------------------------------
-// Watch DUCKERS for idle-active. While any are non-idle, lower PRIMARY volume.
-const duckers = new Set();         // set of channel names currently non-idle
-let savedPrimaryVol = null;        // primary volume captured before first duck
-let duckLock = Promise.resolve();  // serialize applyDuck() so concurrent events can't race
+// --- TTS-pauses-voice ------------------------------------------------------
+// When tts goes non-idle, pause voice; when tts returns to idle, resume voice
+// only if we paused it (don't override a user pause).
+let voicePausedByUs = false;
+let pauseLock = Promise.resolve();
 
-function applyDuck() {
-  duckLock = duckLock.then(async () => {
-    if (duckers.size === 0) {
-      if (savedPrimaryVol != null) {
-        const restore = savedPrimaryVol;
-        savedPrimaryVol = null;
-        try { await mpv(PRIMARY, ["set_property", "volume", restore]); console.log(`unduck: ${PRIMARY} -> ${restore}`); }
-        catch (e) { console.error("unduck failed:", e.message); }
+function applyVoicePause(ttsActive) {
+  pauseLock = pauseLock.then(async () => {
+    try {
+      if (ttsActive) {
+        const paused = await mpv("voice", ["get_property", "pause"]).catch(() => null);
+        if (paused === false) {
+          await mpv("voice", ["set_property", "pause", true]);
+          voicePausedByUs = true;
+          console.log("pause: voice (tts active)");
+        }
+      } else if (voicePausedByUs) {
+        await mpv("voice", ["set_property", "pause", false]);
+        voicePausedByUs = false;
+        console.log("resume: voice (tts idle)");
       }
-    } else {
-      if (savedPrimaryVol == null) {
-        try {
-          savedPrimaryVol = await mpv(PRIMARY, ["get_property", "volume"]) ?? CHANNELS[PRIMARY].baseline;
-          await mpv(PRIMARY, ["set_property", "volume", CHANNELS[PRIMARY].duck]);
-          console.log(`duck: ${PRIMARY} ${savedPrimaryVol} -> ${CHANNELS[PRIMARY].duck}`);
-        } catch (e) { console.error("duck failed:", e.message); savedPrimaryVol = null; }
-      }
-    }
+    } catch (e) { console.error("voice pause/resume failed:", e.message); }
   }).catch(() => {});
-  return duckLock;
+  return pauseLock;
 }
 
-function watchDucker(name) {
-  const ch = CHANNELS[name];
+function watchTtsForVoicePause() {
   let buf = "";
-  const sock = connect(ch.socket);
+  const sock = connect(CHANNELS.tts.socket);
   sock.on("connect", () => {
     sock.write(JSON.stringify({ command: ["observe_property", 1, "idle-active"] }) + "\n");
   });
@@ -92,18 +88,16 @@ function watchDucker(name) {
       try {
         const msg = JSON.parse(line);
         if (msg.event === "property-change" && msg.name === "idle-active") {
-          const idle = !!msg.data;
-          if (idle) duckers.delete(name); else duckers.add(name);
-          await applyDuck();
+          await applyVoicePause(!msg.data);
         }
       } catch {}
     }
   });
-  const reconnect = () => { sock.destroy(); duckers.delete(name); applyDuck().catch(() => {}); setTimeout(() => watchDucker(name), 2000); };
+  const reconnect = () => { sock.destroy(); setTimeout(watchTtsForVoicePause, 2000); };
   sock.on("close", reconnect);
   sock.on("error", reconnect);
 }
-DUCKERS.forEach(watchDucker);
+watchTtsForVoicePause();
 
 // --- MCP tools -------------------------------------------------------------
 const ok = (text) => ({ content: [{ type: "text", text }] });
@@ -211,7 +205,7 @@ const UI_HTML = `<!doctype html><html><head><meta charset=utf-8>
 <h1>mpv remote <span class=hint id=focus-hint>music</span></h1>
 
 <div class=ch id=ch-music>
-  <h2>music <span class=duck id=duck-music style=display:none>ducked</span></h2>
+  <h2>music</h2>
   <div class=now id=now-music>—</div>
   <div class=row><input id=url type=text placeholder="URL or path" autocomplete=off><button onclick="act('music','play',{url:url.value})">Play</button><button onclick="act('music','queue',{url:url.value})">Queue</button></div>
   <div class=row>
@@ -222,7 +216,22 @@ const UI_HTML = `<!doctype html><html><head><meta charset=utf-8>
     <button onclick="act('music','skip')">⏭</button>
   </div>
   <div class=row><button onclick="act('music','stop')">Stop</button></div>
-  <div class=bar><label>Vol</label><input id=vol-music type=range min=0 max=130 value=60 oninput="setVol('music',this.value)"><span id=volv-music>60</span></div>
+  <div class=bar><label>Vol</label><input id=vol-music type=range min=0 max=130 value=50 oninput="setVol('music',this.value)"><span id=volv-music>50</span></div>
+</div>
+
+<div class=ch id=ch-voice>
+  <h2>voice</h2>
+  <div class=now id=now-voice>—</div>
+  <div class=row><input id=url-voice type=text placeholder="URL or path" autocomplete=off><button onclick="act('voice','play',{url:document.getElementById('url-voice').value})">Play</button><button onclick="act('voice','queue',{url:document.getElementById('url-voice').value})">Queue</button></div>
+  <div class=row>
+    <button onclick="act('voice','prev')">⏮</button>
+    <button onclick="act('voice','seek',{seconds:-30})">-30s</button>
+    <button id=pp-voice onclick="togglePause('voice')">⏯</button>
+    <button onclick="act('voice','seek',{seconds:30})">+30s</button>
+    <button onclick="act('voice','skip')">⏭</button>
+  </div>
+  <div class=row><button onclick="act('voice','stop')">Stop</button></div>
+  <div class=bar><label>Vol</label><input id=vol-voice type=range min=0 max=130 value=85 oninput="setVol('voice',this.value)"><span id=volv-voice>85</span></div>
 </div>
 
 <div class=ch id=ch-tts>
@@ -251,8 +260,9 @@ const UI_HTML = `<!doctype html><html><head><meta charset=utf-8>
 </div>
 
 <script>
-const paused={music:false,tts:false};
-const idle={music:false,tts:false};
+const CHS=['music','voice','tts'];
+const paused=Object.fromEntries(CHS.map(c=>[c,false]));
+const idle=Object.fromEntries(CHS.map(c=>[c,false]));
 async function api(path,body){
   const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body||{})});
   return r.json();
@@ -276,11 +286,11 @@ let focused='music';
 function setFocus(ch){
   focused=ch;
   document.getElementById('focus-hint').textContent=ch;
-  for(const c of ['music','tts']){
+  for(const c of CHS){
     document.getElementById('ch-'+c).classList.toggle('focus',c===ch);
   }
 }
-for(const ch of ['music','tts']){
+for(const ch of CHS){
   document.getElementById('ch-'+ch).addEventListener('click',e=>{
     if(e.target.closest('button,input')) return;
     setFocus(ch);
@@ -306,7 +316,7 @@ document.addEventListener('keydown',ev=>{
   else if(k==='['){api('/api/cmd',{channel:ch,name:'speed_delta',args:{delta:-0.1}}).then(refresh);}
   else if(k===']'){api('/api/cmd',{channel:ch,name:'speed_delta',args:{delta:0.1}}).then(refresh);}
   else if(k==='Backspace'){api('/api/cmd',{channel:ch,name:'speed_set',args:{value:1}}).then(refresh);}
-  else if(k==='Tab'){setFocus(ch==='music'?'tts':'music');}
+  else if(k==='Tab'){const i=CHS.indexOf(ch);setFocus(CHS[(i+1)%CHS.length]);}
   else if(k==='9'){api('/api/cmd',{channel:ch,name:'volume_delta',args:{delta:-2}}).then(refresh);}
   else if(k==='0'){api('/api/cmd',{channel:ch,name:'volume_delta',args:{delta:2}}).then(refresh);}
   else h=false;
@@ -324,7 +334,6 @@ async function refresh(){
     document.getElementById('now-'+ch).textContent=t+'\\n'+fmt(d.pos)+' / '+fmt(d.dur);
     if(d.vol!=null){document.getElementById('vol-'+ch).value=Math.round(d.vol);document.getElementById('volv-'+ch).textContent=Math.round(d.vol)}
   }
-  const dm=document.getElementById('duck-music'); dm.style.display=j.ducked?'inline':'none';
 }
 setInterval(refresh,2000);refresh();
 </script></body></html>`;
@@ -344,7 +353,7 @@ async function snapshotChannel(name) {
 
 async function handleApi(req, res, body) {
   if (req.url === "/api/state") {
-    const out = { channels: {}, ducked: savedPrimaryVol != null };
+    const out = { channels: {} };
     for (const name of Object.keys(CHANNELS)) {
       out.channels[name] = await snapshotChannel(name).catch(() => ({}));
     }
