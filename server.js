@@ -86,26 +86,47 @@ function mpv(channel, cmd) {
 // When tts goes non-idle, pause voice; when tts returns to idle, resume voice
 // only if we paused it (don't override a user pause).
 let voicePausedByUs = false;
-let pauseLock = Promise.resolve();
+// Coalescing single-in-flight runner. Avoids the unbounded
+// `lock = lock.then(fn)` chain pattern, which leaks closures (and
+// eventually OOMs) when the trigger is high-frequency. New requests
+// while a run is in flight set a "rerun once" flag instead of
+// extending the chain — bounded outstanding work, same serialization
+// guarantee for the body.
+function makeCoalescer() {
+  let running = null, pending = false;
+  return (fn) => {
+    if (running) { pending = true; return running; }
+    running = (async () => {
+      try {
+        do {
+          pending = false;
+          try { await fn(); } catch (e) { console.error(e); }
+        } while (pending);
+      } finally { running = null; }
+    })();
+    return running;
+  };
+}
 
+const runVoicePause = makeCoalescer();
+let pendingTtsActive = false;
 function applyVoicePause(ttsActive) {
-  pauseLock = pauseLock.then(async () => {
-    try {
-      if (ttsActive) {
-        const paused = await mpv("voice", ["get_property", "pause"]).catch(() => null);
-        if (paused === false) {
-          await mpv("voice", ["set_property", "pause", true]);
-          voicePausedByUs = true;
-          console.log("pause: voice (tts active)");
-        }
-      } else if (voicePausedByUs) {
-        await mpv("voice", ["set_property", "pause", false]);
-        voicePausedByUs = false;
-        console.log("resume: voice (tts idle)");
+  pendingTtsActive = ttsActive;
+  return runVoicePause(async () => {
+    const active = pendingTtsActive;
+    if (active) {
+      const paused = await mpv("voice", ["get_property", "pause"]).catch(() => null);
+      if (paused === false) {
+        await mpv("voice", ["set_property", "pause", true]);
+        voicePausedByUs = true;
+        console.log("pause: voice (tts active)");
       }
-    } catch (e) { console.error("voice pause/resume failed:", e.message); }
-  }).catch(() => {});
-  return pauseLock;
+    } else if (voicePausedByUs) {
+      await mpv("voice", ["set_property", "pause", false]);
+      voicePausedByUs = false;
+      console.log("resume: voice (tts idle)");
+    }
+  });
 }
 
 function watchTtsForVoicePause() {
@@ -155,39 +176,35 @@ const duck = {
   baseline: null,                               // pre-duck music vol
   lastWritten: null,                            // last music value WE wrote
 };
-let duckLock = Promise.resolve();
-
+const runDuck = makeCoalescer();
 function recomputeDuck() {
-  duckLock = duckLock.then(async () => {
-    try {
-      if (duck.active.size === 0) {
-        if (duck.baseline != null) {
-          await mpv("music", ["set_property", "volume", duck.baseline]).catch(() => {});
-          console.log(`unduck: music → ${duck.baseline.toFixed(1)}`);
-        }
-        duck.baseline = null;
-        duck.lastWritten = null;
-        return;
+  return runDuck(async () => {
+    if (duck.active.size === 0) {
+      if (duck.baseline != null) {
+        await mpv("music", ["set_property", "volume", duck.baseline]).catch(() => {});
+        console.log(`unduck: music → ${duck.baseline.toFixed(1)}`);
       }
-      const vols = [];
-      if (duck.active.has("tts")   && typeof duck.vol.tts   === "number") vols.push(duck.vol.tts);
-      if (duck.active.has("voice") && typeof duck.vol.voice === "number") vols.push(duck.vol.voice);
-      if (vols.length === 0 || typeof duck.vol.music !== "number") return;
-      const target = Math.max(...vols) * DUCK_RATIO;
-      if (duck.baseline == null) {
-        if (duck.vol.music <= target) return; // already below gap, no duck needed
-        duck.baseline = duck.vol.music;
-        await mpv("music", ["set_property", "volume", target]).catch(() => {});
-        duck.lastWritten = target;
-        console.log(`duck: music ${duck.vol.music.toFixed(1)} → ${target.toFixed(1)} ` +
-                    `(speaker ${Math.max(...vols).toFixed(1)}, gap -${DUCK_GAP_DB}dB)`);
-      } else if (duck.lastWritten == null || Math.abs(duck.lastWritten - target) > 0.5) {
-        await mpv("music", ["set_property", "volume", target]).catch(() => {});
-        duck.lastWritten = target;
-      }
-    } catch (e) { console.error("duck recompute failed:", e.message); }
-  }).catch(() => {});
-  return duckLock;
+      duck.baseline = null;
+      duck.lastWritten = null;
+      return;
+    }
+    const vols = [];
+    if (duck.active.has("tts")   && typeof duck.vol.tts   === "number") vols.push(duck.vol.tts);
+    if (duck.active.has("voice") && typeof duck.vol.voice === "number") vols.push(duck.vol.voice);
+    if (vols.length === 0 || typeof duck.vol.music !== "number") return;
+    const target = Math.max(...vols) * DUCK_RATIO;
+    if (duck.baseline == null) {
+      if (duck.vol.music <= target) return; // already below gap, no duck needed
+      duck.baseline = duck.vol.music;
+      await mpv("music", ["set_property", "volume", target]).catch(() => {});
+      duck.lastWritten = target;
+      console.log(`duck: music ${duck.vol.music.toFixed(1)} → ${target.toFixed(1)} ` +
+                  `(speaker ${Math.max(...vols).toFixed(1)}, gap -${DUCK_GAP_DB}dB)`);
+    } else if (duck.lastWritten == null || Math.abs(duck.lastWritten - target) > 0.5) {
+      await mpv("music", ["set_property", "volume", target]).catch(() => {});
+      duck.lastWritten = target;
+    }
+  });
 }
 
 function rebaseOnUserNudge(newMusicVol) {
