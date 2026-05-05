@@ -17,6 +17,25 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TTS_LATEST = process.env.TTS_LATEST_PATH
   || `${process.env.HOME}/.cache/agent-audio/latest.mp3`;
 
+// Best-effort tmux session of the MCP host process. Tagged onto every
+// loadfile via mpv's user-data/aar/session so the consumer-side status
+// line / popup can attribute URLs (which carry no session info, unlike
+// denote-stem'd archive paths). Resolved once at startup — the MCP
+// process's tmux env is fixed for its lifetime.
+import { execSync } from "node:child_process";
+const TMUX_SESSION = (() => {
+  if (process.env.AAR_SESSION) return process.env.AAR_SESSION;
+  if (!process.env.TMUX) return "";
+  try {
+    return execSync("tmux display-message -p '#S'", { encoding: "utf8", timeout: 500 }).trim();
+  } catch { return ""; }
+})();
+function tagSession(channel) {
+  if (!TMUX_SESSION) return Promise.resolve();
+  return mpv(channel, ["set_property", "user-data/aar/session", TMUX_SESSION])
+    .catch(() => {}); // older mpv may not support user-data; non-fatal
+}
+
 function mpv(channel, cmd) {
   const ch = CHANNELS[channel];
   if (!ch) return Promise.reject(new Error(`unknown channel: ${channel}`));
@@ -99,6 +118,125 @@ function watchTtsForVoicePause() {
 }
 watchTtsForVoicePause();
 
+// --- Music ducks for tts/voice (gap-targeted) -----------------------------
+// Goal: ensure music sits at least DUCK_GAP_DB below the loudest currently-
+// active speaker (tts and/or voice). If music is already that low, no-op
+// — no point ducking what's already quieter than the gap target.
+//
+// Reactive: re-evaluates whenever any of {tts,voice}.idle-active or
+// {tts,voice,music}.volume changes. Restoration only happens when both
+// speaker channels are idle.
+//
+// Mid-duck user nudges to music are honoured by rebasing the stored
+// baseline by the same proportional relationship that existed before
+// the nudge — so post-duck restoration reflects the user's intent.
+const DUCK_GAP_DB = Number(process.env.AAR_MUSIC_DUCK_GAP_DB || 10);
+const DUCK_RATIO = Math.pow(10, -DUCK_GAP_DB / 20);
+
+const duck = {
+  active: new Set(),                            // {"tts","voice"} subset
+  vol: { tts: null, voice: null, music: null }, // last observed volumes
+  baseline: null,                               // pre-duck music vol
+  lastWritten: null,                            // last music value WE wrote
+};
+let duckLock = Promise.resolve();
+
+function recomputeDuck() {
+  duckLock = duckLock.then(async () => {
+    try {
+      if (duck.active.size === 0) {
+        if (duck.baseline != null) {
+          await mpv("music", ["set_property", "volume", duck.baseline]).catch(() => {});
+          console.log(`unduck: music → ${duck.baseline.toFixed(1)}`);
+        }
+        duck.baseline = null;
+        duck.lastWritten = null;
+        return;
+      }
+      const vols = [];
+      if (duck.active.has("tts")   && typeof duck.vol.tts   === "number") vols.push(duck.vol.tts);
+      if (duck.active.has("voice") && typeof duck.vol.voice === "number") vols.push(duck.vol.voice);
+      if (vols.length === 0 || typeof duck.vol.music !== "number") return;
+      const target = Math.max(...vols) * DUCK_RATIO;
+      if (duck.baseline == null) {
+        if (duck.vol.music <= target) return; // already below gap, no duck needed
+        duck.baseline = duck.vol.music;
+        await mpv("music", ["set_property", "volume", target]).catch(() => {});
+        duck.lastWritten = target;
+        console.log(`duck: music ${duck.vol.music.toFixed(1)} → ${target.toFixed(1)} ` +
+                    `(speaker ${Math.max(...vols).toFixed(1)}, gap -${DUCK_GAP_DB}dB)`);
+      } else if (duck.lastWritten == null || Math.abs(duck.lastWritten - target) > 0.5) {
+        await mpv("music", ["set_property", "volume", target]).catch(() => {});
+        duck.lastWritten = target;
+      }
+    } catch (e) { console.error("duck recompute failed:", e.message); }
+  }).catch(() => {});
+  return duckLock;
+}
+
+function rebaseOnUserNudge(newMusicVol) {
+  // Called when the music volume observer sees a value that isn't ours.
+  // Preserves the proportional gap the user implicitly redefined: if they
+  // bumped music up while ducked, post-duck music should sit higher too.
+  if (duck.baseline == null || duck.lastWritten == null) return;
+  const ratio = duck.lastWritten / duck.baseline;
+  if (ratio > 0 && ratio < 1) {
+    duck.baseline = newMusicVol / ratio;
+  }
+  duck.lastWritten = newMusicVol;
+  console.log(`rebase: user nudged music to ${newMusicVol.toFixed(1)} mid-duck ` +
+              `→ restore target ${duck.baseline.toFixed(1)}`);
+}
+
+// Generic single-property observer wired with auto-reconnect.
+function watchProperty(channel, prop, onChange) {
+  let buf = "";
+  const sock = connect(CHANNELS[channel].socket);
+  sock.on("connect", () => {
+    sock.write(JSON.stringify({ command: ["observe_property", 1, prop] }) + "\n");
+  });
+  sock.on("data", async (d) => {
+    buf += d.toString();
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.event === "property-change" && msg.name === prop) {
+          await onChange(msg.data);
+        }
+      } catch {}
+    }
+  });
+  const reconnect = () => { sock.destroy(); setTimeout(() => watchProperty(channel, prop, onChange), 2000); };
+  sock.on("close", reconnect);
+  sock.on("error", reconnect);
+}
+
+// idle-active drives the active-speaker set.
+for (const ch of ["tts", "voice"]) {
+  watchProperty(ch, "idle-active", async (data) => {
+    if (data) duck.active.delete(ch);
+    else duck.active.add(ch);
+    await recomputeDuck();
+  });
+  // volume drives the gap target — recompute when a speaker changes loudness.
+  watchProperty(ch, "volume", async (data) => {
+    if (typeof data !== "number") return;
+    duck.vol[ch] = data;
+    if (duck.active.has(ch)) await recomputeDuck();
+  });
+}
+// music volume: tracked for both initial-engage decision and user-nudge rebase.
+watchProperty("music", "volume", async (data) => {
+  if (typeof data !== "number") return;
+  duck.vol.music = data;
+  if (duck.lastWritten != null && Math.abs(data - duck.lastWritten) >= 0.5) {
+    rebaseOnUserNudge(data);
+  }
+});
+
 // --- MCP tools -------------------------------------------------------------
 const ok = (text) => ({ content: [{ type: "text", text }] });
 const ChannelArg = z.enum(Object.keys(CHANNELS)).optional();
@@ -112,13 +250,18 @@ function makeServer() {
   }, async ({ url, channel = "music" }) => {
     await mpv(channel, ["loadfile", url, "replace"]);
     await mpv(channel, ["set_property", "pause", false]);
+    await tagSession(channel);
     return ok(`[${channel}] Playing: ${url}`);
   });
 
   s.registerTool("queue", {
     description: "Append URL/path to a channel's playlist.",
     inputSchema: { url: z.string(), channel: ChannelArg },
-  }, async ({ url, channel = "music" }) => { await mpv(channel, ["loadfile", url, "append-play"]); return ok(`[${channel}] Queued: ${url}`); });
+  }, async ({ url, channel = "music" }) => {
+    await mpv(channel, ["loadfile", url, "append-play"]);
+    await tagSession(channel);
+    return ok(`[${channel}] Queued: ${url}`);
+  });
 
   s.registerTool("pause",  { description: "Pause channel.",  inputSchema: { channel: ChannelArg } },
     async ({ channel = "music" }) => { await mpv(channel, ["set_property", "pause", true]);  return ok(`[${channel}] Paused`); });
@@ -364,8 +507,10 @@ async function handleApi(req, res, body) {
   if (req.url === "/api/cmd") {
     const { channel = "music", name, args = {} } = body || {};
     const m = {
-      play:   () => mpv(channel, ["loadfile", args.url, "replace"]).then(() => mpv(channel, ["set_property", "pause", false])),
-      queue:  () => mpv(channel, ["loadfile", args.url, "append-play"]),
+      play:   () => mpv(channel, ["loadfile", args.url, "replace"])
+                       .then(() => mpv(channel, ["set_property", "pause", false]))
+                       .then(() => tagSession(channel)),
+      queue:  () => mpv(channel, ["loadfile", args.url, "append-play"]).then(() => tagSession(channel)),
       pause:  () => mpv(channel, ["set_property", "pause", true]),
       resume: () => mpv(channel, ["set_property", "pause", false]),
       stop:   () => mpv(channel, ["stop"]),
