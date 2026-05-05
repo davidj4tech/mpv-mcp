@@ -17,22 +17,14 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TTS_LATEST = process.env.TTS_LATEST_PATH
   || `${process.env.HOME}/.cache/agent-audio/latest.mp3`;
 
-// Best-effort tmux session of the MCP host process. Tagged onto every
-// loadfile via mpv's user-data/aar/session so the consumer-side status
-// line / popup can attribute URLs (which carry no session info, unlike
-// denote-stem'd archive paths). Resolved once at startup — the MCP
-// process's tmux env is fixed for its lifetime.
-import { execSync } from "node:child_process";
-const TMUX_SESSION = (() => {
-  if (process.env.AAR_SESSION) return process.env.AAR_SESSION;
-  if (!process.env.TMUX) return "";
-  try {
-    return execSync("tmux display-message -p '#S'", { encoding: "utf8", timeout: 500 }).trim();
-  } catch { return ""; }
-})();
-function tagSession(channel) {
-  if (!TMUX_SESSION) return Promise.resolve();
-  return mpv(channel, ["set_property", "user-data/aar/session", TMUX_SESSION])
+// Tag mpv with the caller-supplied session so the agent-audio-relay
+// status line / popup can attribute URLs (which carry no session info,
+// unlike denote-stem'd archive paths). No-op when caller doesn't pass
+// one — there's no useful default since the MCP server typically runs
+// remote from the caller's tmux.
+function tagSession(channel, session) {
+  if (!session) return Promise.resolve();
+  return mpv(channel, ["set_property", "user-data/aar/session", session])
     .catch(() => {}); // older mpv may not support user-data; non-fatal
 }
 
@@ -245,21 +237,24 @@ function makeServer() {
   const s = new McpServer({ name: "mpv-mcp", version: "0.2.0" });
 
   s.registerTool("play", {
-    description: "Load and play URL/path on a channel (default music). Replaces current.",
-    inputSchema: { url: z.string(), channel: ChannelArg },
-  }, async ({ url, channel = "music" }) => {
+    description: "Load and play URL/path on a channel (default music). Replaces current. " +
+      "Pass `session` with your current tmux session name (e.g. $(tmux display-message -p '#S')) " +
+      "so the agent-audio-relay status-line / popup can attribute the clip across hosts.",
+    inputSchema: { url: z.string(), channel: ChannelArg, session: z.string().optional() },
+  }, async ({ url, channel = "music", session }) => {
     await mpv(channel, ["loadfile", url, "replace"]);
     await mpv(channel, ["set_property", "pause", false]);
-    await tagSession(channel);
+    await tagSession(channel, session);
     return ok(`[${channel}] Playing: ${url}`);
   });
 
   s.registerTool("queue", {
-    description: "Append URL/path to a channel's playlist.",
-    inputSchema: { url: z.string(), channel: ChannelArg },
-  }, async ({ url, channel = "music" }) => {
+    description: "Append URL/path to a channel's playlist. " +
+      "Pass `session` with your current tmux session name to tag the clip for cross-host attribution.",
+    inputSchema: { url: z.string(), channel: ChannelArg, session: z.string().optional() },
+  }, async ({ url, channel = "music", session }) => {
     await mpv(channel, ["loadfile", url, "append-play"]);
-    await tagSession(channel);
+    await tagSession(channel, session);
     return ok(`[${channel}] Queued: ${url}`);
   });
 
@@ -509,8 +504,8 @@ async function handleApi(req, res, body) {
     const m = {
       play:   () => mpv(channel, ["loadfile", args.url, "replace"])
                        .then(() => mpv(channel, ["set_property", "pause", false]))
-                       .then(() => tagSession(channel)),
-      queue:  () => mpv(channel, ["loadfile", args.url, "append-play"]).then(() => tagSession(channel)),
+                       .then(() => tagSession(channel, args.session)),
+      queue:  () => mpv(channel, ["loadfile", args.url, "append-play"]).then(() => tagSession(channel, args.session)),
       pause:  () => mpv(channel, ["set_property", "pause", true]),
       resume: () => mpv(channel, ["set_property", "pause", false]),
       stop:   () => mpv(channel, ["stop"]),
