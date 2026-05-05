@@ -12,7 +12,7 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$HOME/mpv-mcp"
 SVDIR="$PREFIX/var/service"
 HOOK_DST="$HOME/.claude/claude-tts-hook.sh"
-RELAY_SRC="${RELAY_SRC:-$HOME/agent-audio-relay-src}"  # path to agent-audio-relay checkout
+RELAY_SRC="${RELAY_SRC:-}"  # path to agent-audio-relay checkout; opt-in (was $HOME/agent-audio-relay-src and silently downgraded the relay to a stale checkout's version on every install)
 
 echo "[mpv-mcp] repo: $REPO"
 echo "[mpv-mcp] app:  $APP_DIR"
