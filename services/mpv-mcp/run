@@ -1,15 +1,17 @@
 #!/data/data/com.termux/files/usr/bin/sh
 exec 2>&1
-MUSIC="$PREFIX/tmp/mpv.sock"
+MUSIC="$PREFIX/tmp/mpv-music.sock"
+VOICE="$PREFIX/tmp/mpv-voice.sock"
 TTS="$PREFIX/tmp/mpv-tts.sock"
 BIND="100.94.14.59"
 i=0
 while [ $i -lt 30 ]; do
-  [ -S "$MUSIC" ] && [ -S "$TTS" ] && ifconfig 2>/dev/null | grep -q "$BIND" && break
+  [ -S "$MUSIC" ] && [ -S "$VOICE" ] && [ -S "$TTS" ] && ifconfig 2>/dev/null | grep -q "$BIND" && break
   i=$((i+1)); sleep 1
 done
 cd "$HOME/mpv-mcp"
 export MPV_MUSIC_SOCKET="$MUSIC"
+export MPV_VOICE_SOCKET="$VOICE"
 export MPV_TTS_SOCKET="$TTS"
 export PORT=8765
 export HOST="$BIND"
