@@ -222,13 +222,23 @@ function rebaseOnUserNudge(newMusicVol) {
 }
 
 // Generic single-property observer wired with auto-reconnect.
+// Reconnect is guarded — close + error both fire on disconnect, so an
+// unguarded handler would spawn two watchers per drop, doubling the
+// watcher count exponentially and OOM'ing within ~90s.
 function watchProperty(channel, prop, onChange) {
   let buf = "";
   const sock = connect(CHANNELS[channel].socket);
+  let scheduled = false;
+  const scheduleReconnect = () => {
+    if (scheduled) return;
+    scheduled = true;
+    sock.destroy();
+    setTimeout(() => watchProperty(channel, prop, onChange), 2000);
+  };
   sock.on("connect", () => {
     sock.write(JSON.stringify({ command: ["observe_property", 1, prop] }) + "\n");
   });
-  sock.on("data", async (d) => {
+  sock.on("data", (d) => {
     buf += d.toString();
     let nl;
     while ((nl = buf.indexOf("\n")) >= 0) {
@@ -237,14 +247,16 @@ function watchProperty(channel, prop, onChange) {
       try {
         const msg = JSON.parse(line);
         if (msg.event === "property-change" && msg.name === prop) {
-          await onChange(msg.data);
+          // Fire-and-forget — don't await, so the data handler's
+          // closure is released immediately. onChange is coalesced
+          // anyway via makeCoalescer().
+          Promise.resolve(onChange(msg.data)).catch(() => {});
         }
       } catch {}
     }
   });
-  const reconnect = () => { sock.destroy(); setTimeout(() => watchProperty(channel, prop, onChange), 2000); };
-  sock.on("close", reconnect);
-  sock.on("error", reconnect);
+  sock.on("close", scheduleReconnect);
+  sock.on("error", scheduleReconnect);
 }
 
 // idle-active drives the active-speaker set.
