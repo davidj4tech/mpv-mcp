@@ -28,6 +28,30 @@ function tagSession(channel, session) {
     .catch(() => {}); // older mpv may not support user-data; non-fatal
 }
 
+// Per-channel play history stored in mpv's user-data so any mpv-IPC
+// client (popup via tts-ctl, web UI, etc.) can read it without a new
+// transport. Capped — mpv user-data is in-memory, no point letting it
+// grow unbounded.
+const HISTORY_CAP = 100;
+async function appendHistory(channel, url) {
+  if (!url) return;
+  try {
+    const cur = await mpv(channel, ["get_property", "user-data/aar/history"]).catch(() => null);
+    const list = Array.isArray(cur) ? cur.slice() : [];
+    // Don't push duplicate of the immediately previous entry — back-to-
+    // back queue/play of the same URL would otherwise pollute the walk.
+    if (!(list.length && list[list.length - 1].url === url)) {
+      list.push({ url, ts: Date.now() });
+      while (list.length > HISTORY_CAP) list.shift();
+    }
+    await mpv(channel, ["set_property", "user-data/aar/history", list]).catch(() => {});
+    // Cursor jumps to newest on every fresh play. Side-trips (back/forward
+    // walks) only adjust the cursor, don't append, so the history stays
+    // an honest "what was actually loaded" log.
+    await mpv(channel, ["set_property", "user-data/aar/history-cursor", list.length - 1]).catch(() => {});
+  } catch {}
+}
+
 function mpv(channel, cmd) {
   const ch = CHANNELS[channel];
   if (!ch) return Promise.reject(new Error(`unknown channel: ${channel}`));
@@ -245,6 +269,7 @@ function makeServer() {
     await mpv(channel, ["loadfile", url, "replace"]);
     await mpv(channel, ["set_property", "pause", false]);
     await tagSession(channel, session);
+    await appendHistory(channel, url);
     return ok(`[${channel}] Playing: ${url}`);
   });
 
@@ -255,6 +280,7 @@ function makeServer() {
   }, async ({ url, channel = "music", session }) => {
     await mpv(channel, ["loadfile", url, "append-play"]);
     await tagSession(channel, session);
+    await appendHistory(channel, url);
     return ok(`[${channel}] Queued: ${url}`);
   });
 
@@ -504,8 +530,11 @@ async function handleApi(req, res, body) {
     const m = {
       play:   () => mpv(channel, ["loadfile", args.url, "replace"])
                        .then(() => mpv(channel, ["set_property", "pause", false]))
-                       .then(() => tagSession(channel, args.session)),
-      queue:  () => mpv(channel, ["loadfile", args.url, "append-play"]).then(() => tagSession(channel, args.session)),
+                       .then(() => tagSession(channel, args.session))
+                       .then(() => appendHistory(channel, args.url)),
+      queue:  () => mpv(channel, ["loadfile", args.url, "append-play"])
+                       .then(() => tagSession(channel, args.session))
+                       .then(() => appendHistory(channel, args.url)),
       pause:  () => mpv(channel, ["set_property", "pause", true]),
       resume: () => mpv(channel, ["set_property", "pause", false]),
       stop:   () => mpv(channel, ["stop"]),
