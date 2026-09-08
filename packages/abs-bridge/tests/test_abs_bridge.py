@@ -110,7 +110,7 @@ def test_a_session_with_no_device_info_is_still_labelled():
 
 class _Abs:
     def __init__(self, item):
-        self.item, self.closed = item, []
+        self.item, self.closed, self.token = item, [], "t"
 
     def req(self, method, path, body=None):
         if path.startswith("/api/items/"):
@@ -449,3 +449,49 @@ def test_without_durations_a_small_size_difference_is_ignored():
     feed_eps = [{"guid": "session:a", "enclosure": {"length": "1000000"}}]
     have = [{"id": "e1", "guid": "session:a", "audioFile": {"metadata": {"size": 1003000}}}]
     assert syncmod.stale_episodes(feed_eps, have) == []
+
+
+# --- an action, not a reflex (2026-09-09) -----------------------------------
+
+def test_explicit_cast_picks_the_session_touched_last():
+    older = {"id": "a", "mediaType": "book", "updatedAt": 100}
+    newer = {"id": "b", "mediaType": "book", "updatedAt": 200}
+    pod = {"id": "c", "mediaType": "podcast", "updatedAt": 300}
+    assert cast_watcher.pick_session([older, pod, newer])["id"] == "b"
+    assert cast_watcher.pick_session([older, newer], "a")["id"] == "a"
+    assert cast_watcher.pick_session([older, newer], "zz") is None
+    assert cast_watcher.pick_session([pod]) is None
+
+
+def test_media_abs_cast_sends_the_live_session_to_the_rooms(tmp_path, monkeypatch):
+    (tmp_path / "Hounded.m4b").write_bytes(b"x")
+    monkeypatch.setenv("AUDIOBOOK_LIB", str(tmp_path))
+    monkeypatch.setenv("ABS_TOKEN", "t")
+    calls = []
+    monkeypatch.setattr(cast_watcher.subprocess, "call",
+                        lambda cmd, **kw: calls.append(cmd) or 0)
+
+    class Api(_Abs):
+        def req(self, method, path, body=None):
+            if path == "/api/sessions/open":
+                return {"sessions": [dict(_session(), mediaType="book", updatedAt=1)]}
+            return super().req(method, path, body)
+    api = Api(ITEMS[0])
+    monkeypatch.setattr(cast_watcher, "Abs", lambda: api)
+    monkeypatch.setattr(cast_watcher, "load_env", lambda: None)
+
+    assert cast_watcher.cast_main([]) == 0
+    assert calls and calls[0][:3] == ["media", "book", "play"]
+    assert api.closed
+
+
+def test_media_abs_cast_with_nothing_open_says_so(monkeypatch, capsys):
+    monkeypatch.setenv("ABS_TOKEN", "t")
+
+    class Api(_Abs):
+        def req(self, method, path, body=None):
+            return {"sessions": []}
+    monkeypatch.setattr(cast_watcher, "Abs", lambda: Api(None))
+    monkeypatch.setattr(cast_watcher, "load_env", lambda: None)
+    assert cast_watcher.cast_main([]) == 1
+    assert "nothing to cast" in capsys.readouterr().out

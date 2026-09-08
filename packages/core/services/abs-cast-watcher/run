@@ -1,8 +1,10 @@
 #!/bin/sh
-# abs-cast-watcher — press play in the Audiobookshelf app and the rooms take
-# over: cast the session to the book channel, then close it so the client stops.
+# abs-cast-watcher — follows the Audiobookshelf app's live session. The phone
+# is the primary player: by default this only logs what is playing there.
+# CAST_AUTO=1 restores the reflex (cast the session to the book channel, then
+# close it so the client stops); `media-abs-cast` does the same once, on request.
 #
-# Only a session whose position advances in real time twice running is cast, so
+# Only a session whose position advances in real time twice running counts, so
 # a tab left open for hours never seizes the speakers. CAST_DRY=1 to watch it
 # decide without touching anything.
 exec 2>&1

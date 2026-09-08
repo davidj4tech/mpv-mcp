@@ -1,11 +1,16 @@
-"""`media-abs-cast-watcher` — press play on the phone, hear it in the rooms.
+"""`media-abs-cast-watcher` — the phone's live session, and on request the rooms.
 
 Audiobookshelf plays client-side and the server has no "pause that client"
-command, so casting works by substitution: notice a session that is genuinely
-playing, start the same file on the book channel at the live position, then
-close the ABS session. The official clients stop once their session is gone —
-within a sync cycle, so there is a few seconds of overlap and then the rooms
-have it.
+command, so casting works by substitution: start the same file on the book
+channel at the live position, then close the ABS session. The official clients
+stop once their session is gone — within a sync cycle, so there is a few
+seconds of overlap and then the rooms have it.
+
+Since 2026-09-09 that is an **action, not a reflex**. The phone (Sasonica's
+ExoPlayer) is the primary player; the watcher keeps following its session but
+only casts when `CAST_AUTO=1`. `media-abs-cast` sends the live session to the
+rooms when asked. The old behaviour treated the app as a remote control for
+mpv, which meant a Bluetooth listen on the phone was stolen by the speakers.
 
 **An open session is not a playing session.** Idle tabs stay open for hours,
 and a seek moves the position without anything playing. So a session only
@@ -23,6 +28,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+from typing import Optional
 
 from ._abs import Abs, load_env, local_path, log
 
@@ -98,6 +104,46 @@ def cast(abs_api: Abs, session: dict, *, dry: bool = False) -> bool:
     return True
 
 
+def pick_session(sessions: list, session_id: str = "") -> Optional[dict]:
+    """The session an explicit cast means: the named one, else the book
+    session touched most recently. Someone asking to hear the phone in the
+    rooms has just been listening on it, so recency is the right guess and
+    the advancing test is not needed — they said so."""
+    books = [s for s in sessions if s.get("mediaType") == "book"]
+    if session_id:
+        return next((s for s in books if s.get("id") == session_id), None)
+    if not books:
+        return None
+    return max(books, key=lambda s: s.get("updatedAt") or 0)
+
+
+def cast_main(argv=None) -> int:
+    """`media-abs-cast` — send the phone's live session to the rooms, now."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="media-abs-cast", description=cast_main.__doc__)
+    ap.add_argument("--session", default="", help="ABS session id (default: most recent book session)")
+    ap.add_argument("--list", action="store_true", help="show open book sessions and exit")
+    ap.add_argument("--dry", action="store_true", help="decide, touch nothing")
+    a = ap.parse_args(argv)
+    load_env()
+    abs_api = Abs()
+    if not abs_api.token:
+        log("ABS_TOKEN not set in ~/.config/agent-media/abs-bridge.env")
+        return 2
+    sessions = abs_api.req("GET", "/api/sessions/open").get("sessions", [])
+    if a.list:
+        for s in sessions:
+            if s.get("mediaType") == "book":
+                print(f"{s.get('id')}  {int(s.get('currentTime') or 0)}s  "
+                      f"{device_label(s)}  {s.get('displayTitle')}")
+        return 0
+    s = pick_session(sessions, a.session)
+    if s is None:
+        log("no open book session on Audiobookshelf — nothing to cast")
+        return 1
+    return 0 if cast(abs_api, s, dry=a.dry) else 1
+
+
 def main(argv=None) -> int:
     load_env()
     abs_api = Abs()
@@ -106,11 +152,15 @@ def main(argv=None) -> int:
     deny = [s.strip().lower() for s in os.environ.get("CAST_DEVICE_DENY", "").split(",") if s.strip()]
     allow = [s.strip().lower() for s in os.environ.get("CAST_DEVICE_ALLOW", "").split(",") if s.strip()]
     dry = os.environ.get("CAST_DRY", "0") == "1"
+    #: Off by default: the phone is the player. On, the watcher moves every
+    #: live session to the rooms the way it did before 2026-09-09.
+    auto = os.environ.get("CAST_AUTO", "0") == "1"
 
     if not abs_api.token:
         log("ABS_TOKEN not set in ~/.config/agent-media/abs-bridge.env — idle.")
         return 0
     log(f"cast watcher up: ABS={abs_api.url} poll={poll_s}s cooldown={cooldown_s}s "
+        f"auto={'on' if auto else 'off (media-abs-cast sends a session to the rooms)'} "
         f"allow={allow or '-'} deny={deny or '-'}")
 
     state: dict = {}
@@ -142,6 +192,11 @@ def main(argv=None) -> int:
                     if not device_ok(s, allow, deny):
                         log(f"skip (device filtered): {device_label(s)}")
                         st["cast"] = True      # decided; stop re-deciding
+                        continue
+                    if not auto:
+                        log(f"live on {device_label(s)}: {s.get('displayTitle')!r} "
+                            f"@ {int(ct)}s — leaving it there (CAST_AUTO=0)")
+                        st["cast"] = True      # noted once; the phone keeps it
                         continue
                     if cast(abs_api, s, dry=dry):
                         st["cast"] = True

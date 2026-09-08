@@ -14,6 +14,7 @@ dependencies = ["agent-media-core"]
 [project.scripts]
 media-abs-book-bridge  = "agent_media_abs.book_bridge:main"
 media-abs-cast-watcher = "agent_media_abs.cast_watcher:main"
+media-abs-cast         = "agent_media_abs.cast_watcher:cast_main"
 media-abs-sync         = "agent_media_abs.sync:main"
 
 [tool.hatch.build.targets.wheel]
