@@ -7,6 +7,14 @@
     localStorage.setItem('eink', qs.get('eink') === '0' ? '0' : '1');
     history.replaceState(null, '', location.pathname);
   }
+  // ---- captions: ?subs=0 arms them off for this device, ?subs=1 back on. The
+  // same per-device preference the `c` key flips, settable from a URL so a
+  // page that FRAMES the canvas next to a transcript (Sasonica's chat) can
+  // come up without the words drawn twice.
+  if (qs.has('subs')) {
+    localStorage.setItem('subs', qs.get('subs') === '0' ? '0' : '1');
+    history.replaceState(null, '', location.pathname);
+  }
   function einkOn() { return localStorage.getItem('eink') === '1'; }
   if (einkOn()) document.documentElement.classList.add('eink');
   // ---- screen name OVERRIDE: normally the server derives this device's name
