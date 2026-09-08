@@ -229,3 +229,29 @@ Consequences for the rest of the proposal:
 
 Cost note: red5 is 4 vCPU and 7 GB. aeneas fits; whisper does not fit
 comfortably and should run elsewhere or overnight.
+
+## As built, 2026-09-09
+
+- **Casting is an action.** `media-abs-cast-watcher` only logs a live app
+  session unless `CAST_AUTO=1`; `media-abs-cast` (`--list`, `--session`,
+  `--dry`) sends it to the rooms on request (agent-media 1647553).
+- **The app has a control endpoint.** Sasonica's player service listens on
+  the phone's loopback, `127.0.0.1:8772` (`SasonicaControl.kt`, 8daa6641 on
+  the `sasonica` branch). Reach it from red5 over the ssh hop:
+
+  ```
+  ssh p8a curl -s 127.0.0.1:8772/state
+  ssh p8a curl -s '127.0.0.1:8772/play?item=<libraryItemId>&t=<seconds>&rate=1.6'
+  ssh p8a curl -s 127.0.0.1:8772/pause      # also /resume /toggle /stop
+  ssh p8a curl -s '127.0.0.1:8772/seek?t=<seconds>'   /jump?by=±s   /speed?rate=
+  ```
+
+  Every route answers with the state: `{source:"sasonica", player, closed,
+  item, episode, title, t, dur, paused, rate, chapter}`. `/play` waits for
+  the server to issue the session (up to 20 s) and answers 502/504 when it
+  cannot; no answer at all means the app is not running, which is the
+  fallback-to-mpv signal. Loopback only, like the companion readout on
+  :8770 and the share listener on :8771.
+- **Next:** `media book play` tries the phone first when the file is an ABS
+  item and falls back to mpv; the canvas `book` source reads `/state`
+  (or the app pushes it) before the ABS-progress interpolation.
