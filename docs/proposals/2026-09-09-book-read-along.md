@@ -303,6 +303,25 @@ the app, both reasonable and neither built yet:
    notification, as the companion app does — a setting, off by default) or
    a push service (FCM). The foreground service is the one that fits.
 
-With those, `MEDIA_PHONE_PLAYER_URL=http://p8a:8772` replaces the ssh
-transport and nothing else changes. The cold case (app killed) still needs
+**Built the same day** (Sasonica cbf4f7fa): Settings → Sasonica → *Remote
+control*. A foreground service (`SasonicaRemoteService`, one quiet
+notification) keeps the process thawed — `isFrozen=false`, `procState=FGS`
+— binds the player service so there is always something to talk to, and
+opens a second listener on every interface, **:8773**, that demands a
+bearer token. It restarts after a reboot or an update (`SasonicaBootReceiver`).
+The loopback listener on :8772 is unchanged; its `/remote` reports the
+address and token, and `/remote?enable=1` (loopback only) switches the mode
+on from a shell, which is how red5 was bootstrapped:
+
+```
+ssh p8a curl -s '127.0.0.1:8772/remote?enable=1'   # once; or use the setting
+# then in ~/.config/agent-media.env on red5:
+MEDIA_PHONE_PLAYER_URL_APP=http://p8a:8773
+MEDIA_PHONE_PLAYER_TOKEN=<token from /remote>
+```
+
+Verified 09:02 from red5 with no ssh in the path: `media book play` landed
+in the app at 1:41, `media book skip -- -10` and `media book pause`
+followed it there. A tailnet caller with the token cannot reconfigure
+(`enable` answers 401 off-loopback). The cold case (app killed) still needs
 something to launch it; that is the mpv fallback by design.
