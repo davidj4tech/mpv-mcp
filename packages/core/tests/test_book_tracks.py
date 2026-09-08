@@ -249,13 +249,18 @@ def test_conversation_log_shows_the_turn_being_spoken_now(tmp_path, monkeypatch)
         "extras": {"source_session": "sess-1", "text": "Speaking this now",
                    "writer_pid": os.getpid(), "listener": False,
                    "clip_sentences": ["Speaking this now.", "And this next."],
-                   "current_sentence_idx": 1}})
+                   "current_sentence_idx": 1,
+                   # Local lane: durations, no offsets. Paused 4.5s in.
+                   "clip_durations_s": [2.0, 3.0],
+                   "play_started_at": 1000.0, "paused_at": 1004.5}})
     lines = bt.conversation_log("sess-1", folder)
     assert lines[-1] == {"start": None, "end": None, "at": 300.0, "key": "",
                          "who": "agent", "text": "Speaking this now",
-                         # Live, and which sentence the voice is on.
+                         # Live, which sentence the voice is on, and the
+                         # timeline so a reader can move it on its own clock.
                          "live": True, "sentence": 1,
-                         "sentences": ["Speaking this now.", "And this next."]}
+                         "sentences": ["Speaking this now.", "And this next."],
+                         "offsets": [0.0, 2.0], "elapsed": 4.5, "paused": True}
 
 
 def test_conversation_log_ignores_a_live_turn_from_another_session(tmp_path, monkeypatch):

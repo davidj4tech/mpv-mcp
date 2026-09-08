@@ -688,10 +688,27 @@ def _live_turn(session: str) -> Optional[dict]:
         sentence = int(ex.get("current_sentence_idx"))
     except (TypeError, ValueError):
         sentence = None
+    # The timeline as well as the index, so a reader can move the highlight on
+    # its own clock between asks instead of trailing the voice by a poll. The
+    # phone lane records where each sentence starts; the local lane records
+    # how long each clip is, which is the same thing summed. Elapsed is read
+    # the way the sentence loop reads it (intake.submit.elapsed_from_row):
+    # from `play_started_at`, frozen at `paused_at` while paused.
+    offsets = [float(x) for x in (ex.get("clip_offsets_s") or [])]
+    if not offsets and ex.get("clip_durations_s"):
+        acc = 0.0
+        for d in ex.get("clip_durations_s") or []:
+            offsets.append(acc)
+            acc += float(d or 0)
+    base = float(ex.get("play_started_at") or at)
+    paused_at = ex.get("paused_at")
+    now = float(paused_at) if paused_at else time.time()
     return {"at": round(float(at), 3), "text": text,
             "listener": bool(ex.get("listener")),
             "sentences": [str(x) for x in (ex.get("clip_sentences") or [])],
-            "sentence": sentence}
+            "sentence": sentence, "offsets": offsets,
+            "elapsed": round(max(0.0, now - base), 3),
+            "paused": bool(paused_at)}
 
 
 def conversation_log(session: str, folder: Path, *, target=None) -> list:
@@ -781,7 +798,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
         # Marked live, with the sentence being spoken, so the transcript can
         # follow the voice sentence by sentence rather than just show the turn.
         line.update({"live": True, "sentences": live["sentences"],
-                     "sentence": live["sentence"]})
+                     "sentence": live["sentence"], "offsets": live["offsets"],
+                     "elapsed": live["elapsed"], "paused": live["paused"]})
         out.append(line)
     return out
 
