@@ -40,6 +40,7 @@ than maintained by hand.
 
 ## Proposals
 
+- [2026-09-09 book-read-along](proposals/2026-09-09-book-read-along.md) — ePub sentences as subtitles for narrated books, and a book canvas
 - [2026-08-09 spoken-docs](proposals/2026-08-09-spoken-docs.md) — this layout, and playing documents from the popup
 - [2026-08-09 doc-roots-org-para](proposals/2026-08-09-doc-roots-org-para.md) — how playback meets GTD, PARA, org-roam and Denote
 - [2026-08-07 play-video](proposals/2026-08-07-play-video.md) — `media play-video` subcommand

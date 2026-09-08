@@ -1,0 +1,139 @@
+# Read-along for the book channel: the ePub as subtitles, and a canvas for books
+
+Status: proposal, nothing built.
+Date: 2026-09-09
+
+David's question, verbatim: *"bringing in an ePub file for an audiobook for
+text highlighting the spoken words like subtitles... I'm also curious about
+having a canvas for audiobooks too which I guess would require the
+subtitles?"*
+
+## Recommendation in one line
+
+Yes to both, in that order — and the canvas half is nearly free, because the
+canvas already has a subtitle band and the book channel already reports its
+position. The whole job is producing **one timings file per book**, and that
+is a forced-alignment problem we have not touched before.
+
+## What already exists (this is most of the argument)
+
+- **A subtitle band.** The canvas shows the sentence being spoken, fed by the
+  `sentence` field of the speech-state SSE (`canvas.py:speech_state`,
+  `canvas.js:setSubtitle`). `?subs=0/1` already switches it per device
+  (113a643). It is channel-agnostic on the client; only the server side is
+  speech-shaped.
+- **A ~1 Hz position feed from the phone.** The video-sync poller in
+  `canvas.py` already reads the phone's mpv IPC once a second and broadcasts
+  `{"kind":"video", t, paused, rate}` while screens are connected. The book
+  socket is the same protocol one path over.
+- **A book observer.** `book_observer.py` sits on `sink-book.sock`, knows the
+  current file and `time-pos`, and already handles "somebody else loaded
+  this file" — so the read-along does not care who pressed play.
+- **The ePub reader on the phone.** Sasonica inherits Audiobookshelf's
+  `components/readers/EpubReader.vue`, and ABS lets an item carry an ebook
+  file beside its audio. What ABS does *not* have is any link between the
+  reader's position and the player's — "immersion reading" is the one Kindle
+  feature nobody open-source has shipped in a library app.
+
+So the missing piece is exactly one artefact: **for this audiobook, which
+sentence of the ePub is being read at second *t*.**
+
+## The alignment, which is the actual work
+
+Commercial audiobooks carry no text timing. The ePub has the words, the audio
+has the seconds, and something has to marry them once per book. Three ways,
+in order of preference:
+
+1. **Storyteller** (`storyteller-platform`, self-hosted, AGPL). It does
+   precisely this — takes an ePub and the audiobook, forced-aligns them, and
+   emits an EPUB 3 with Media Overlays plus its own read-along Android app.
+   Before writing any aligner, run one book through it. Two outcomes are
+   both wins: either its app is the answer and we integrate at the
+   library level, or its output (SMIL, sentence-level) is the timings file
+   and we keep our own players. It uses whisper under the hood, so see the
+   cost note below.
+2. **aeneas.** Built for ePub-text-plus-audio; CPU only, fast (it
+   synthesises the text with espeak and DTWs the MFCCs, no neural model).
+   Emits sentence timings as JSON or SMIL. Weakness: it assumes the text and
+   the audio say the same words in the same order, so front matter,
+   abridgements, and a narrator who skips the epigraphs each need a chapter
+   to be trimmed by hand first. For a faithful unabridged read it is the
+   cheap, right answer, and it runs comfortably on red5's four cores.
+3. **whisperX** (transcribe with word timestamps, then align the transcript
+   to the ePub text). Tolerant of mismatch, gives *word*-level timing, and is
+   the only route to karaoke-style highlighting. Costs: a model download, and
+   on red5's CPU the `small` model runs roughly real-time — a ten-hour book
+   is a ten-hour job. If hpo has a usable GPU it is minutes. Transcript-to-text
+   matching is a second step (diff the two token streams, anchor on
+   agreement, interpolate between anchors) that we would write.
+
+Pick: **try 1, build on 2, keep 3 for word-level later.** Sentence-level is
+what the canvas band shows anyway, and sentence-level is what the Pine Note
+can refresh.
+
+The output, whichever aligner: `<book>.align.json`, a list of
+`{start_s, end_s, chapter, text}` in reading order, stored next to the audio
+(or in ABS's item folder, where the app can fetch it). One file per book,
+produced once, never touched again.
+
+## Path A — the canvas (small)
+
+1. In `canvas.py`, the phone poller also reads the book socket
+   (`path`, `time-pos`, `pause`, `speed`) in the same batched round-trip
+   it already makes for video.
+2. Server-side lookup: load `<book>.align.json` for the current file (keyed
+   by normalised URI, cached), bisect on `time-pos`, and broadcast
+   `{"kind":"book", sentence, chapter, t, dur, paused}` at the same
+   change-only cadence the speech state uses.
+3. `canvas.js`: a `book` message drives the same `setSubtitle` and band
+   reservation. Speech keeps priority — while a reply is being spoken the
+   band shows the reply, and the book's sentence returns when the voice
+   stops, the way video already yields to a figure.
+4. Tapping a sentence seeks, which the canvas already does for speech;
+   the seek goes to the book socket instead.
+
+That is one afternoon once one book is aligned. Nothing new is recorded and
+nothing new runs on the phone.
+
+**The Pine Note is the best screen for this.** DU4 draws text crisply and
+draws nothing else well. A page of the current paragraph with the live
+sentence in bold, refreshed once a sentence, is the e-ink canvas finally
+doing the thing it is for — and it needs the `eink` mode to stop hiding the
+band and to show a paragraph of context rather than a strip.
+
+## Path B — the phone, in Sasonica (bigger, later)
+
+Same timings file, consumed by `EpubReader.vue`: while the item's audio is
+playing, scroll the reader to the current sentence and highlight it;
+tapping a sentence seeks the player. This is the immersion-reading feature
+ABS lacks, and the fork-side discipline still applies (`sasonica-keep-
+upstream-mergeable`: a hook-sized `// Sasonica:` block in the reader that
+polls the local player's position, the lookup in a fork-only module). Worth
+doing only after Path A proves the alignment is good enough to look at.
+
+## What it will not do
+
+- **Word-level highlighting** on any e-ink surface. The refresh cannot keep up.
+- **Books read by agent-media's own voice** need none of this — the renderer
+  already reports per-clip sentences (see §4 of `2026-08-30-speech-epub-
+  export.md`). This proposal is for books somebody else narrated.
+- **Imperfect ePubs.** A pirated or OCR'd ePub with a different edition's text
+  will align badly. The alignment step should print a confidence (aeneas
+  gives one per fragment) and refuse to publish a file below a floor, so a
+  bad book shows no subtitles rather than wrong ones.
+
+## Order of work
+
+1. Pick one unabridged book David owns as both ePub and audio. Run it through
+   Storyteller in a container on red5; note wall-clock and whether the
+   result opens in Thorium with highlighting. **Decision point:** is the
+   Storyteller app good enough on its own?
+2. Regardless, write `media book align <audio> <epub>` around aeneas,
+   producing `<book>.align.json` with per-sentence confidence. Chapter
+   mapping by ordinal, with a `--chapters` override for books whose ePub
+   spine and audio tracks disagree.
+3. Path A on the wall canvas, then the Note's paragraph view.
+4. Path B in Sasonica, if 3 gets used.
+
+Cost note: red5 is 4 vCPU and 7 GB. aeneas fits; whisper does not fit
+comfortably and should run elsewhere or overnight.
