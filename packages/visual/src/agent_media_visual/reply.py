@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 import subprocess
@@ -42,6 +43,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+log = logging.getLogger("agent-media.visual.reply")
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
@@ -734,6 +737,11 @@ def log_for_item(item: str, bearer: str) -> tuple[bool, dict]:
                               "pending": pending,
                               "suggestion": ghost_prompt(pane) if pane else ""}
     except Exception as e:  # noqa: BLE001
+        # Say so in the journal as well as to the caller: the app folds every
+        # failed fetch into an empty transcript, so this line is the only
+        # record on this side of what actually went wrong.
+        log.exception("conversation log for %s (session %s) failed: %s",
+                      item, session, e)
         return False, {"error": f"could not read the conversation ({e})",
                        "status": 500}
     return False, {"error": "no manifest for that conversation", "status": 404}
