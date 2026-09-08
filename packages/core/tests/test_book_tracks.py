@@ -195,3 +195,36 @@ def test_a_conversation_with_no_manifest_has_no_position(tmp_path, monkeypatch):
     (tmp_path / "book-tracks").mkdir()
     monkeypatch.setattr(bt, "state_dir", lambda: tmp_path)
     assert bt._series_position("nobody", Path("/c/work/Whatever")) == ""
+
+
+# --- the transcript shows a turn before the manifest catches up -----------------
+
+def test_conversation_log_includes_the_live_tail(tmp_path, monkeypatch):
+    """A turn in speech history but not yet in the manifest still appears —
+    with no position — so a reply lands in the transcript within a poll of
+    being spoken instead of waiting out the debounced publish."""
+    from agent_media_core import book_tracks as bt, session_feed
+    folder = tmp_path / "p-agent-media" / "A talk"
+    # The manifest is one turn behind: it has the agent's turn at 100 only.
+    monkeypatch.setattr(bt, "_read_manifest",
+                        lambda s: {"turns": [{"at": 100.0, "title": "First answer"}]})
+    # No Audiobookshelf, so no positions are fetched (and none are needed).
+    monkeypatch.setattr(bt, "_abs_ready", lambda target=None: None)
+    # Speech history has the published turn plus a newer listener turn (200)
+    # and the agent's fresh reply (300) that has not been published yet.
+    hist = [
+        session_feed.Turn(at=100.0, text="First answer", workspace="p-agent-media",
+                          clips=[], durations=[], sentences=[], listener=False),
+        session_feed.Turn(at=200.0, text="You: a question", workspace="p-agent-media",
+                          clips=[], durations=[], sentences=[], listener=True),
+        session_feed.Turn(at=300.0, text="The fresh reply", workspace="p-agent-media",
+                          clips=[], durations=[], sentences=[], listener=False),
+    ]
+    monkeypatch.setattr(session_feed, "turns", lambda s, store=None: list(hist))
+
+    lines = bt.conversation_log("sess-1", folder)
+    assert [(l["who"], l["text"], l["start"]) for l in lines] == [
+        ("agent", "First answer", None),   # from the manifest turn
+        ("you", "a question", None),        # live tail: "You: " stripped
+        ("agent", "The fresh reply", None), # live tail: the reply, shown at once
+    ]

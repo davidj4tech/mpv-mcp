@@ -593,12 +593,22 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     rendered.
     """
     turns = _read_manifest(session).get("turns", [])
-    if not turns:
+
+    # History keyed by the same `at` the manifest recorded, so a turn whose
+    # audio has been swept from the cache still has its words here. Speech
+    # history is written per turn as it is spoken — well before the debounced
+    # publish writes that turn into the manifest — so it is also the source of
+    # the *live tail*: turns said but not yet placed in the audio item.
+    said = {}
+    for t in session_feed.turns(session):
+        said[round(float(t.at), 3)] = t
+
+    if not turns and not said:
         return []
 
     positions = []
     ready = _abs_ready(target)
-    if ready:
+    if ready and turns:
         url, token, libs = ready
         item = _find_item(url, token, libs, folder)
         if item:
@@ -614,25 +624,33 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
             except Exception as e:  # noqa: BLE001 — a log without times still reads
                 log.warning("book-tracks: no track offsets for the log (%s)", e)
 
-    # History keyed by the same `at` the manifest recorded, so a turn whose
-    # audio has been swept from the cache still has its words here.
-    said = {}
-    for t in session_feed.turns(session):
-        said[round(float(t.at), 3)] = t
-
-    out = []
-    for n, turn in enumerate(turns):
-        at = round(float(turn.get("at") or 0.0), 3)
-        spoken = said.get(at)
-        text = (spoken.text if spoken else turn.get("title") or "").strip()
-        who = "you" if (spoken and spoken.listener) else "agent"
+    def _line(who_listener, text, pos):
+        text = (text or "").strip()
+        who = "you" if who_listener else "agent"
         if who == "you" and text.startswith("You: "):
             # The label belongs to the chapter title, where there is no other
             # way to tell the sides apart. Here the side is its own field.
             text = text[len("You: "):]
+        return {"start": pos.get("start"), "end": pos.get("end"),
+                "who": who, "text": text}
+
+    out = []
+    seen = set()
+    for n, turn in enumerate(turns):
+        at = round(float(turn.get("at") or 0.0), 3)
+        seen.add(at)
+        spoken = said.get(at)
         pos = positions[n] if n < len(positions) else {}
-        out.append({"start": pos.get("start"), "end": pos.get("end"),
-                    "who": who, "text": text})
+        out.append(_line(spoken and spoken.listener,
+                         spoken.text if spoken else turn.get("title"), pos))
+
+    # The live tail: turns in speech history the manifest has not caught up to
+    # yet. Shown at once, with no position — the audio item does not place them
+    # until the next publish, at which point they join `turns` above and gain
+    # their offsets. This is what lets a reply appear in the transcript within
+    # a poll of being spoken instead of waiting out the publish cycle.
+    for at in sorted(a for a in said if a not in seen):
+        out.append(_line(said[at].listener, said[at].text, {}))
     return out
 
 
