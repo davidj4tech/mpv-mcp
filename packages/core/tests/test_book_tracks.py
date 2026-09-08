@@ -261,6 +261,22 @@ def test_conversation_log_shows_the_turn_being_spoken_now(tmp_path, monkeypatch)
                          "live": True, "sentence": 1,
                          "sentences": ["Speaking this now.", "And this next."],
                          "offsets": [0.0, 2.0], "elapsed": 4.5, "paused": True}
+    # Still playing: elapsed runs on the wall clock from play_started_at.
+    # (The first time this path ran for real it raised NameError — `time`
+    # was never imported — and every transcript asked for while a reply was
+    # audible came back as a 500 the app showed as "Nothing said yet.")
+    monkeypatch.setattr(StateStore, "get_now_playing", lambda self, sink: {
+        "started_at": 300.0,
+        "extras": {"source_session": "sess-1", "text": "Speaking this now",
+                   "writer_pid": os.getpid(), "listener": False,
+                   "clip_sentences": ["Speaking this now.", "And this next."],
+                   "current_sentence_idx": 0,
+                   "clip_durations_s": [2.0, 3.0],
+                   "play_started_at": 1000.0}})
+    monkeypatch.setattr(bt.time, "time", lambda: 1001.25)
+    live = bt.conversation_log("sess-1", folder)[-1]
+    assert live["live"] and live["paused"] is False
+    assert live["elapsed"] == 1.25 and live["sentence"] == 0
 
 
 def test_conversation_log_ignores_a_live_turn_from_another_session(tmp_path, monkeypatch):
