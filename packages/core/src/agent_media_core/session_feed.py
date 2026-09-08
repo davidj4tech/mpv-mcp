@@ -86,6 +86,9 @@ class Turn:
     #: True when the listener typed this turn from the player rather than the
     #: assistant speaking it. A conversation has two sides; this is which.
     listener: bool = False
+    #: The reply's dedup key, when the row recorded one. It is what the visual
+    #: channel remembers its pushes by, so it is how a turn finds its picture.
+    key: str = ""
 
     @property
     def title(self) -> str:
@@ -147,6 +150,7 @@ def turns(session: str, *, store=None) -> list[Turn]:
                         clips=clips, durations=kept,
                         sentences=(lines if any(lines) else []),
                         listener=bool(ex.get("listener")),
+                        key=str(ex.get("dedup_key") or ""),
                         workspace=(ex.get("source_tmux_session") or "").strip()))
     out.sort(key=lambda t: t.at)
     return out

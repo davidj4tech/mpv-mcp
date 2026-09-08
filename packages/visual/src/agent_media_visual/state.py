@@ -6,7 +6,7 @@ scene per session, so the next reply *evolves* the artwork instead of
 starting an unrelated picture (see generate.shape_prompt).
 
 Config (env):
-  MEDIA_VISUAL_SPOOL_KEEP      newest images kept by gc (default 200)
+  MEDIA_VISUAL_SPOOL_KEEP      newest images kept by gc (default 2000)
   MEDIA_VISUAL_CONTINUITY      "0" disables scene continuity (default on)
   MEDIA_VISUAL_CONTINUITY_TTL  seconds a scene stays alive (default 7200 —
                                walk away for the evening and the canvas
@@ -20,7 +20,10 @@ import os
 import time
 from pathlib import Path
 
-DEFAULT_SPOOL_KEEP = 200
+# Two thousand rather than two hundred since the transcript started showing a
+# reply's picture: at ~10 KB an SVG that is 20 MB for weeks of conversations,
+# and a conversation read back later should still have its figures.
+DEFAULT_SPOOL_KEEP = 2000
 DEFAULT_CONTINUITY_TTL = 7200
 
 
@@ -101,7 +104,7 @@ def save_scene(session: str, scene: str) -> None:
 # re-pushes it so "play that again" brings the picture back too — otherwise a
 # replayed diagram plays under whatever newer artwork happens to be on screen.
 
-_PUSHES_KEEP = 40
+_PUSHES_KEEP = 2000   # matched to DEFAULT_SPOOL_KEEP: the memory of what was pushed is what finds a picture again
 
 
 def pushes_path() -> Path:

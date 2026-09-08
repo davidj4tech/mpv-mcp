@@ -564,6 +564,44 @@ def conversation(item: str, bearer: str) -> tuple[bool, dict]:
                   "resumable": session_exists(session)}
 
 
+def attach_pictures(lines: list) -> None:
+    """Give each log line the picture(s) the canvas drew for that reply.
+
+    The visual channel remembers what it pushed for a reply under the reply's
+    dedup key (state.save_push), and the speech row carries the same key, so
+    the join is a lookup. Each line gains `images`: canvas-relative or absolute
+    URLs the app can put straight into an <img>, and `figure`: whether the
+    picture was drawn to be read (a [[visual:]] figure) rather than ambient
+    artwork. Only pictures still in the spool are offered — a swept file would
+    be a broken image, and a transcript with holes in it is worse than one
+    with no pictures.
+    """
+    from .state import load_push, spool_dir
+
+    spool = spool_dir()
+    for line in lines:
+        key = line.get("key")
+        if not key:
+            continue
+        payload = load_push(key)
+        if not payload:
+            continue
+        names = ([payload.get("image")] if payload.get("image")
+                 else [b.get("image") for b in payload.get("sequence") or []])
+        images = []
+        for name in names:
+            name = str(name or "").strip()
+            if not name:
+                continue
+            if "/" in name:
+                images.append(name)          # absolute: another host's spool
+            elif (spool / name).is_file():
+                images.append("/img/" + name)
+        if images:
+            line["images"] = images
+            line["figure"] = payload.get("purpose") == "figure"
+
+
 def log_for_item(item: str, bearer: str) -> tuple[bool, dict]:
     """The conversation behind `item`, as readable lines. Same gates as a reply.
 
@@ -597,6 +635,7 @@ def log_for_item(item: str, bearer: str) -> tuple[bool, dict]:
                 # "thinking" line and polls faster until it clears, rather than
                 # waiting out a whole idle poll with nothing on screen.
                 pending = bool(lines) and lines[-1].get("who") == "you"
+                attach_pictures(lines)
                 return True, {"session": session, "lines": lines,
                               "pending": pending}
     except Exception as e:  # noqa: BLE001

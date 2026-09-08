@@ -731,15 +731,17 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
             except Exception as e:  # noqa: BLE001 — a log without times still reads
                 log.warning("book-tracks: no track offsets for the log (%s)", e)
 
-    def _line(who_listener, text, pos):
+    def _line(who_listener, text, pos, at=None, key=""):
         text = (text or "").strip()
         who = "you" if who_listener else "agent"
         if who == "you" and text.startswith("You: "):
             # The label belongs to the chapter title, where there is no other
             # way to tell the sides apart. Here the side is its own field.
             text = text[len("You: "):]
+        # `at` and `key` name the turn for anything that wants to hang more on
+        # it — the canvas attaches the picture drawn for a reply by its key.
         return {"start": pos.get("start"), "end": pos.get("end"),
-                "who": who, "text": text}
+                "who": who, "text": text, "at": at, "key": key or ""}
 
     out = []
     seen = set()
@@ -749,7 +751,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
         spoken = said.get(at)
         pos = positions[n] if n < len(positions) else {}
         out.append(_line(spoken and spoken.listener,
-                         spoken.text if spoken else turn.get("title"), pos))
+                         spoken.text if spoken else turn.get("title"), pos,
+                         at, spoken.key if spoken else ""))
 
     # The live tail: turns in speech history the manifest has not caught up to
     # yet. Shown at once, with no position — the audio item does not place them
@@ -758,14 +761,14 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     # a poll of being spoken instead of waiting out the publish cycle.
     for at in sorted(a for a in said if a not in seen):
         seen.add(at)
-        out.append(_line(said[at].listener, said[at].text, {}))
+        out.append(_line(said[at].listener, said[at].text, {}, at, said[at].key))
 
     # The turn speaking right now, if it has not already landed as an ended
     # row above. This is what puts a reply on screen *while* it is being
     # spoken, not after — keyed by the same `at` it will keep, so it becomes
     # the ended row in place rather than a duplicate.
     if live and live["at"] not in seen:
-        out.append(_line(live["listener"], live["text"], {}))
+        out.append(_line(live["listener"], live["text"], {}, live["at"]))
     return out
 
 

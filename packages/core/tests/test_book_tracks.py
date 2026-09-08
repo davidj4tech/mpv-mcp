@@ -249,7 +249,7 @@ def test_conversation_log_shows_the_turn_being_spoken_now(tmp_path, monkeypatch)
         "extras": {"source_session": "sess-1", "text": "Speaking this now",
                    "writer_pid": os.getpid(), "listener": False}})
     lines = bt.conversation_log("sess-1", folder)
-    assert lines[-1] == {"start": None, "end": None,
+    assert lines[-1] == {"start": None, "end": None, "at": 300.0, "key": "",
                          "who": "agent", "text": "Speaking this now"}
 
 
