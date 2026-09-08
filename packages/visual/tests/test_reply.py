@@ -275,6 +275,7 @@ def test_focus_walks_the_client_to_the_pane(monkeypatch):
 # --- "should the app draw a reply box here?" -----------------------------------
 
 def test_conversation_says_yes_for_a_live_one(monkeypatch):
+    monkeypatch.setattr(reply, "ghost_prompt", lambda pane: "sp4 is up now too")
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
     monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
     monkeypatch.setattr(reply, "session_for_item", lambda *a, **k: ("sess-1", ""))
@@ -282,7 +283,8 @@ def test_conversation_says_yes_for_a_live_one(monkeypatch):
     monkeypatch.setattr(reply, "session_exists", lambda s: True)
     ok, detail = reply.conversation("item1", "tok")
     assert ok is True
-    assert detail == {"session": "sess-1", "live": True, "pane": "%7", "resumable": True}
+    assert detail == {"session": "sess-1", "live": True, "pane": "%7", "resumable": True,
+                      "suggestion": "sp4 is up now too"}
 
 
 def test_conversation_says_no_to_someone_who_may_not_reply(monkeypatch):
@@ -493,3 +495,46 @@ def test_a_reply_gets_the_picture_the_canvas_drew_for_it(tmp_path, monkeypatch):
     # A swept spool file is left out; another host's absolute URL is passed on.
     assert lines[2]["images"] == ["http://other/img/x.svg"] and lines[2]["figure"] is False
     assert "images" not in lines[3]
+
+
+# --- the ghost prompt -----------------------------------------------------------
+
+_GHOST = (
+    "\x1b[38;5;246mnew task? \x1b[38;5;153m/clear\x1b[38;5;246m to sav…\x1b[39m\n"
+    "\x1b[38;5;244m────────────────────\x1b[39m\n"
+    "\x1b[39m❯\u00a0\x1b[2msp4 is up now too\x1b[0m\n"
+    "\x1b[38;5;244m────────────────────\x1b[39m\n"
+    "  \x1b[38;5;211m⏵⏵ bypass permissions on\x1b[39m\n"
+)
+
+
+def test_ghost_prompt_is_the_dim_run_after_the_glyph(monkeypatch):
+    monkeypatch.setattr(reply, "_capture_pane", lambda pane: _GHOST)
+    assert reply.ghost_prompt("%1") == "sp4 is up now too"
+
+
+def test_ghost_prompt_wraps_onto_dim_continuation_lines(monkeypatch):
+    cap = _GHOST.replace(
+        "❯\u00a0\x1b[2msp4 is up now too\x1b[0m\n",
+        "❯\u00a0\x1b[2mrebuild the APK and\x1b[0m\n  \x1b[2minstall it on p8a\x1b[0m\n")
+    monkeypatch.setattr(reply, "_capture_pane", lambda pane: cap)
+    assert reply.ghost_prompt("%1") == "rebuild the APK and install it on p8a"
+
+
+def test_ghost_prompt_is_gone_once_something_is_typed(monkeypatch):
+    cap = _GHOST.replace("\x1b[2msp4 is up now too\x1b[0m", "yes do that")
+    monkeypatch.setattr(reply, "_capture_pane", lambda pane: cap)
+    assert reply.ghost_prompt("%1") == ""
+
+
+def test_ghost_prompt_is_empty_on_a_bare_prompt(monkeypatch):
+    cap = _GHOST.replace("\x1b[2msp4 is up now too\x1b[0m", "")
+    monkeypatch.setattr(reply, "_capture_pane", lambda pane: cap)
+    assert reply.ghost_prompt("%1") == ""
+    monkeypatch.setattr(reply, "_capture_pane", lambda pane: "")
+    assert reply.ghost_prompt("%1") == ""
+
+
+def test_truecolor_params_are_not_mistaken_for_dim():
+    runs = reply._dim_runs("\x1b[38;2;10;20;30mplain\x1b[2m ghost\x1b[22m back")
+    assert runs == [("plain", False), (" ghost", True), (" back", False)]

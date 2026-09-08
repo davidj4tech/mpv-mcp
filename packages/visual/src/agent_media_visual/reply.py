@@ -331,6 +331,95 @@ def session_exists(session: str) -> bool:
     return bool(glob.glob(os.path.expanduser(f"~/.claude/projects/*/{session}.jsonl")))
 
 
+# --- the ghost prompt -----------------------------------------------------------
+
+_PROMPT_GLYPH = "\u276f"   # ❯ — the input line starts with it
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def _capture_pane(pane: str) -> str:
+    """The bottom of `pane` with its colours, which is where the ghost lives."""
+    return _tmux(["capture-pane", "-t", pane, "-p", "-e", "-S", "-40"])
+
+
+def _dim_runs(line: str) -> list[tuple[str, bool]]:
+    """`(text, dim)` runs of one captured line, following SGR state along it."""
+    out: list[tuple[str, bool]] = []
+    dim = False
+    pos = 0
+    for m in _SGR.finditer(line):
+        if m.start() > pos:
+            out.append((line[pos:m.start()], dim))
+        params = [x for x in m.group(1).split(";") if x] or ["0"]
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if p in ("38", "48", "58") and i + 1 < len(params):
+                # A colour, whose arguments may well be "2" (truecolor)
+                i += 5 if params[i + 1] == "2" else 3
+                continue
+            if p == "0":
+                dim = False
+            elif p == "2":
+                dim = True
+            elif p == "22":
+                dim = False
+            i += 1
+        pos = m.end()
+    if pos < len(line):
+        out.append((line[pos:], dim))
+    return out
+
+
+def ghost_prompt(pane: str) -> str:
+    """Claude Code's suggested next prompt, read off the screen. "" if none.
+
+    When a turn ends the TUI writes a follow-up it thinks you might type next
+    onto the input line — dim, accepted with Tab, gone the moment you type.
+    It exists nowhere but on that screen: the transcript records that a
+    suggestion was accepted, never its words. So it is scraped. The input
+    line is the one starting with the prompt glyph; the suggestion is the dim
+    run after it, continued onto the lines below while those are dim too
+    (a long one wraps). Typed text is not dim, so a half-typed reply reads as
+    no suggestion — right, since the ghost has already left the screen.
+    """
+    cap = _capture_pane(pane)
+    if not cap:
+        return ""
+    lines = cap.split("\n")
+    start = next((i for i in range(len(lines) - 1, -1, -1)
+                  if _SGR.sub("", lines[i]).lstrip().startswith(_PROMPT_GLYPH)), None)
+    if start is None:
+        return ""
+    words: list[str] = []
+    first = True
+    for line in lines[start:]:
+        runs = _dim_runs(line)
+        on_prompt_line = first
+        if first:
+            # Drop everything up to and including the glyph itself.
+            text = "".join(t for t, _ in runs)
+            cut = text.index(_PROMPT_GLYPH) + 1
+            trimmed: list[tuple[str, bool]] = []
+            seen = 0
+            for t, d in runs:
+                if seen + len(t) <= cut:
+                    seen += len(t)
+                    continue
+                trimmed.append((t[max(0, cut - seen):], d))
+                seen += len(t)
+            runs = trimmed
+            first = False
+        plain = "".join(t for t, d in runs if not d).strip("\u00a0 ")
+        dim = "".join(t for t, d in runs if d).strip("\u00a0 ")
+        if plain and on_prompt_line:
+            return ""            # something typed: the ghost has already gone
+        if plain or not dim:
+            break                # the box's bottom rule, or a bare line
+        words.append(dim)
+    return " ".join(" ".join(words).split())
+
+
 # --- reviving a session that has ended -----------------------------------------
 
 
@@ -561,7 +650,8 @@ def conversation(item: str, bearer: str) -> tuple[bool, dict]:
         return False, {"error": err, "status": 404}
     pane = live_sessions().get(session, "")
     return True, {"session": session, "live": bool(pane), "pane": pane or None,
-                  "resumable": session_exists(session)}
+                  "resumable": session_exists(session),
+                  "suggestion": ghost_prompt(pane) if pane else ""}
 
 
 def attach_pictures(lines: list) -> None:
@@ -636,8 +726,13 @@ def log_for_item(item: str, bearer: str) -> tuple[bool, dict]:
                 # waiting out a whole idle poll with nothing on screen.
                 pending = bool(lines) and lines[-1].get("who") == "you"
                 attach_pictures(lines)
+                # The ghost prompt rides along with every poll: it appears a
+                # few seconds after the turn it follows, so a one-off read at
+                # page-open would mostly find it not there yet.
+                pane = live_sessions().get(session, "")
                 return True, {"session": session, "lines": lines,
-                              "pending": pending}
+                              "pending": pending,
+                              "suggestion": ghost_prompt(pane) if pane else ""}
     except Exception as e:  # noqa: BLE001
         return False, {"error": f"could not read the conversation ({e})",
                        "status": 500}
