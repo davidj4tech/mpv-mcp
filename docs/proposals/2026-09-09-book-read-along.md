@@ -252,6 +252,27 @@ comfortably and should run elsewhere or overnight.
   cannot; no answer at all means the app is not running, which is the
   fallback-to-mpv signal. Loopback only, like the companion readout on
   :8770 and the share listener on :8771.
+- **Tested on p8a, 2026-09-09 08:14** (build 8280aac8): play at 101 s, seek,
+  speed, pause, jump all answer with the state. Three things the client on
+  red5 must know, all found the hard way:
+  1. **The app is frozen in the background** (Android's cached-app freezer:
+     `dumpsys activity processes` says `isFrozen=true`), and a frozen process
+     answers nothing — connections *time out* rather than refuse. A broadcast
+     to the app's exported media-button receiver thaws it for a few seconds:
+     `am broadcast -n com.sasonica.app/androidx.media.session.MediaButtonReceiver -a android.intent.action.MEDIA_BUTTON`
+     (works from Termux, no adb). Hit `/play` inside that window; once
+     playing, the foreground service keeps it awake. `connection refused`
+     means the player service does not exist (app killed, e.g. by an
+     install) — only an activity launch creates it, so that is the
+     fall-back-to-mpv signal.
+  2. **Item ids belong to the server the app is logged into** — red5:13379
+     (the react instance), not 13378. Look the title up there.
+  3. **The app's own play request can take 19 s** when the phone's network
+     flaps (`Network capabilities changed` every 3 s in its log); `/play`
+     now waits 45 s. The server itself answers in 0.1 s.
+  Also set that day: `dumpsys deviceidle whitelist +com.sasonica.app`
+  (battery "unrestricted"); it does not stop the freezer but keeps the app
+  from being killed. Revert with `whitelist -com.sasonica.app`.
 - **Next:** `media book play` tries the phone first when the file is an ABS
   item and falls back to mpv; the canvas `book` source reads `/state`
   (or the app pushes it) before the ABS-progress interpolation.
