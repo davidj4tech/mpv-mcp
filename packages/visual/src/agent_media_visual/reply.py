@@ -583,7 +583,13 @@ def log_for_item(item: str, bearer: str) -> tuple[bool, dict]:
                 lines = book_tracks.conversation_log(
                     session, Path(str(data.get("folder") or "")),
                     target="conversations")
-                return True, {"session": session, "lines": lines}
+                # `pending` is true while the last thing said was the listener's:
+                # a reply is in, no answer has landed yet. The app shows a
+                # "thinking" line and polls faster until it clears, rather than
+                # waiting out a whole idle poll with nothing on screen.
+                pending = bool(lines) and lines[-1].get("who") == "you"
+                return True, {"session": session, "lines": lines,
+                              "pending": pending}
     except Exception as e:  # noqa: BLE001
         return False, {"error": f"could not read the conversation ({e})",
                        "status": 500}

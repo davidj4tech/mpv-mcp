@@ -69,6 +69,10 @@ def test_a_refusal_is_never_cached(monkeypatch):
     # One transient failure used to refuse every reply for the next minute.
     answers = [(None, 0), ({"user": {"username": "d", "type": "root"}}, 200)]
     monkeypatch.setattr(reply, "_abs_url", lambda: "http://abs")
+    # One server, so the two canned answers line up with the two calls. Without
+    # this the test reads the dev machine's real abs-bridge.env: an extra server
+    # there consumes an answer of its own and the assertion desyncs.
+    monkeypatch.setattr(reply, "abs_urls", lambda: ["http://abs"])
     monkeypatch.setattr(reply, "_abs_get", lambda *a, **k: answers.pop(0))
     reply._IDENT.clear()
     assert reply.abs_identity("tok") == (None, 0)
@@ -432,3 +436,38 @@ def test_abs_home_falls_back_to_the_publishing_server(monkeypatch):
     reply._IDENT.clear()
     monkeypatch.setattr(reply, "_abs_url", lambda: "http://one.example")
     assert reply.abs_home("never-seen") == "http://one.example"
+
+
+# --- the transcript log flags a reply in flight ---------------------------------
+
+def _log_ready(monkeypatch, tmp_path, lines):
+    """Everything log_for_item needs, with a canned set of transcript lines."""
+    from agent_media_core import book_tracks
+    _manifests(tmp_path, monkeypatch,
+               [("sess-1", "/home/ryer/conversations/scratch/A talk")])
+    monkeypatch.setattr(reply, "abs_identity",
+                        lambda b: ({"username": "d", "type": "root"}, 200))
+    monkeypatch.setattr(reply, "session_for_item", lambda *a, **k: ("sess-1", ""))
+    monkeypatch.setattr(book_tracks, "conversation_log", lambda *a, **k: lines)
+
+
+def test_log_is_pending_when_the_listener_had_the_last_word(monkeypatch, tmp_path):
+    _log_ready(monkeypatch, tmp_path,
+               [{"who": "agent", "text": "Hi"}, {"who": "you", "text": "A question"}])
+    ok, detail = reply.log_for_item("item1", "tok")
+    assert ok is True
+    assert detail["pending"] is True
+
+
+def test_log_is_not_pending_once_the_answer_has_landed(monkeypatch, tmp_path):
+    _log_ready(monkeypatch, tmp_path,
+               [{"who": "you", "text": "A question"}, {"who": "agent", "text": "An answer"}])
+    ok, detail = reply.log_for_item("item1", "tok")
+    assert ok is True
+    assert detail["pending"] is False
+
+
+def test_an_empty_log_is_not_pending(monkeypatch, tmp_path):
+    _log_ready(monkeypatch, tmp_path, [])
+    ok, detail = reply.log_for_item("item1", "tok")
+    assert ok is True and detail["pending"] is False
