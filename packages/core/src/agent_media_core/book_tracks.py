@@ -179,6 +179,28 @@ def folder_for(session: str, turns: list, manifest: dict) -> Optional[Path]:
 LISTENER_VOICE = "en-AU-WilliamNeural"
 
 
+#: How long the same words from the same listener count as the same turn.
+LISTENER_REPEAT_S = 120.0
+
+
+def _listener_turn_recently(store, session: str, text: str, now: float) -> bool:
+    """Whether `text` was already recorded as this session's listener turn."""
+    try:
+        rows = store.recent_history(sink="speech", limit=50)
+    except Exception:  # noqa: BLE001 — a store that cannot answer cannot dedupe
+        return False
+    label = f"You: {text}"
+    for row in rows:
+        ex = row.get("extras")
+        if not isinstance(ex, dict) or not ex.get("listener"):
+            continue
+        if ex.get("source_session") != session or row.get("text") != label:
+            continue
+        if now - float(row.get("started_at") or 0) <= LISTENER_REPEAT_S:
+            return True
+    return False
+
+
 def record_listener_turn(session: str, text: str, *, store=None) -> bool:
     """Render a reply the listener typed and add it to the conversation.
 
@@ -196,6 +218,15 @@ def record_listener_turn(session: str, text: str, *, store=None) -> bool:
     from .state.store import StateStore
 
     at = _time.time()
+    st = store or StateStore()
+    # The same words arrive twice when a reply sent from the player is typed
+    # into the session by the canvas: the canvas records it as it sends, and
+    # the prompt hook records it as Claude Code receives it. Both are right to
+    # try — either may be the only one installed — so the recorder is where
+    # the repeat is dropped. Same session, same words, within a couple of
+    # minutes: already a turn, and reported as one.
+    if _listener_turn_recently(st, session, text, at):
+        return True
     d = cache_dir() / "audio"
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -215,7 +246,6 @@ def record_listener_turn(session: str, text: str, *, store=None) -> bool:
     dur = _ffprobe(out)
 
     try:
-        st = store or StateStore()
         st.add_history(
             sink="speech", uri=str(out), started_at=at, ended_at=at + dur,
             # Never played anywhere: the row exists to be archived, not routed.
