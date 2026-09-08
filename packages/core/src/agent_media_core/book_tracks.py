@@ -429,6 +429,37 @@ def _abs_ready(target=None):
     return (url, token, books) if books else None
 
 
+def _abs_ready_all(target=None):
+    """Every Audiobookshelf that should carry conversation metadata, as a list
+    of `(url, token, [book libraries])`.
+
+    The primary (`_abs_ready`) first, then each extra server from `ABS_SERVERS`
+    resolved to its own book libraries with its own token. Empty when none is
+    configured. A server that will not answer is dropped, not fatal — the same
+    posture the single-server path always took.
+    """
+    from . import library
+
+    out = []
+    primary = _abs_ready(target)
+    if primary:
+        out.append(primary)
+    import json as _json
+    import urllib.request as _u
+    for url, token in library._abs_extra_servers(target):
+        try:
+            req = _u.Request(f"{url}/api/libraries",
+                             headers={"Authorization": f"Bearer {token}"})
+            with _u.urlopen(req, timeout=15) as r:
+                libs = _json.loads(r.read()).get("libraries", [])
+        except Exception:  # noqa: BLE001
+            continue
+        books = [l for l in libs if l.get("mediaType") == "book"]
+        if books:
+            out.append((url, token, books))
+    return out
+
+
 def _find_item(url: str, token: str, libs: list, folder: Path):
     """The scanned item for this folder, or None.
 
@@ -658,12 +689,8 @@ def set_metadata(session: str, folder: Path, *, target=None) -> str:
     on every publish, which means a rescan that reverts it corrects itself on
     the next turn.
     """
-    ready = _abs_ready(target)
-    if not ready:
-        return ""
-    url, token, libs = ready
-    item = _find_item(url, token, libs, folder)
-    if not item:
+    servers = _abs_ready_all(target)
+    if not servers:
         return ""
     turns = session_feed.turns(session)
     title = session_feed.asked_for(session, turns) if turns else ""
@@ -673,27 +700,37 @@ def set_metadata(session: str, folder: Path, *, target=None) -> str:
     sequence = _series_position(session, folder)
     author = os.environ.get("MEDIA_CONVERSATION_AUTHOR") or CONVERSATION_AUTHOR
 
-    md = ((_abs_item(url, token, item["id"]) or {}).get("media") or {}).get("metadata") or {}
-    have_series = [(x.get("name"), str(x.get("sequence") or ""))
-                   for x in (md.get("series") or [])]
-    have_authors = [a.get("name") for a in (md.get("authors") or [])]
-    if (md.get("title") == title
-            and have_series == [(workspace, sequence)]
-            and have_authors == [author]):
-        return ""
-    try:
-        _abs_patch(url, token, f"/api/items/{item['id']}/media",
-                   {"metadata": {
-                       "title": title,
-                       # Arrays, not the seriesName/authorName fields: those are
-                       # the read side of the same thing and a write to them is
-                       # accepted and ignored.
-                       "series": [{"name": workspace, "sequence": sequence}],
-                       "authors": [{"name": author}]}})
-    except Exception as e:  # noqa: BLE001 — metadata is not worth a failure
-        log.warning("book-tracks: could not describe %s (%s)", folder.name, e)
-        return ""
-    return title
+    # Fan out: each server is its own item, its own token. One that lacks the
+    # item yet, or will not answer, is skipped rather than failing the rest, so
+    # a freshly-added second instance catches up on its next scan.
+    described = False
+    for url, token, libs in servers:
+        item = _find_item(url, token, libs, folder)
+        if not item:
+            continue
+        md = ((_abs_item(url, token, item["id"]) or {}).get("media") or {}).get("metadata") or {}
+        have_series = [(x.get("name"), str(x.get("sequence") or ""))
+                       for x in (md.get("series") or [])]
+        have_authors = [a.get("name") for a in (md.get("authors") or [])]
+        if (md.get("title") == title
+                and have_series == [(workspace, sequence)]
+                and have_authors == [author]):
+            described = True
+            continue
+        try:
+            _abs_patch(url, token, f"/api/items/{item['id']}/media",
+                       {"metadata": {
+                           "title": title,
+                           # Arrays, not the seriesName/authorName fields: those
+                           # are the read side of the same thing and a write to
+                           # them is accepted and ignored.
+                           "series": [{"name": workspace, "sequence": sequence}],
+                           "authors": [{"name": author}]}})
+            described = True
+        except Exception as e:  # noqa: BLE001 — metadata is not worth a failure
+            log.warning("book-tracks: could not describe %s on %s (%s)",
+                        folder.name, url, e)
+    return title if described else ""
 
 
 def reopen(folder: Path, *, target=None) -> Optional[str]:

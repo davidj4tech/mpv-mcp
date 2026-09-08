@@ -104,15 +104,45 @@ def _abs_cfg(target=None) -> tuple[str, str, str]:
     return url.rstrip("/"), token, lib
 
 
-def trigger_abs_scan(target=None) -> bool:
-    """Ask Audiobookshelf to rescan its book library after an import.
+def _abs_extra_servers(target=None) -> list[tuple[str, str]]:
+    """`(url, token)` for the *additional* Audiobookshelf servers that should
+    receive the same conversation metadata and rescans as the primary one.
 
-    Per-target library selection via ABS_LIBRARY_<TARGET> (falls back to
-    ABS_LIBRARY, then the first book-type library).
+    Each has its own token, because an API key is minted per server: a bearer
+    from one is rejected by another. The format is therefore ``url|token``,
+    comma-separated, in ``ABS_SERVERS`` (env ``MEDIA_ABS_SERVERS`` for a
+    one-off) beside the primary ``ABS_URL``/``ABS_TOKEN`` in abs-bridge.env.
+    Blank — the default — means the single primary server it always was.
+
+    Distinct from ``ABS_URLS``, which is a bare-URL allow-list the reply/cast
+    side forwards the *caller's own* bearer to; those never carry a token and
+    must not, so metadata fan-out gets its own key rather than overloading it.
     """
-    url, token, want = _abs_cfg(target)
-    if not url or not token:
-        return False
+    raw = _tenv("MEDIA_ABS_SERVERS", target) or ""
+    if not raw:
+        try:
+            for line in (Path.home() / ".config" / "agent-media"
+                         / "abs-bridge.env").read_text().splitlines():
+                line = line.strip()
+                if line.startswith("ABS_SERVERS=") and "=" in line:
+                    raw = line.split("=", 1)[1].strip().strip('"\'')
+                    break
+        except OSError:
+            pass
+    out: list[tuple[str, str]] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or "|" not in entry:
+            continue
+        url, token = entry.split("|", 1)
+        url, token = url.strip().rstrip("/"), token.strip()
+        if url and token:
+            out.append((url, token))
+    return out
+
+
+def _scan_one(url: str, token: str, want: str) -> bool:
+    """Trigger a rescan of one server's book library. True on success."""
     try:
         req = urllib.request.Request(f"{url}/api/libraries", headers={"Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -127,6 +157,25 @@ def trigger_abs_scan(target=None) -> bool:
             return True
     except Exception:
         return False
+
+
+def trigger_abs_scan(target=None) -> bool:
+    """Ask Audiobookshelf to rescan its book library after an import.
+
+    Fans out to every configured server — the primary plus any in
+    ``ABS_SERVERS`` (see `_abs_extra_servers`) — so a second instance with its
+    file watcher off still picks the import up. True if the primary scanned.
+
+    Per-target library selection via ABS_LIBRARY_<TARGET> (falls back to
+    ABS_LIBRARY, then the first book-type library).
+    """
+    url, token, want = _abs_cfg(target)
+    if not url or not token:
+        return False
+    ok = _scan_one(url, token, want)
+    for xurl, xtoken in _abs_extra_servers(target):
+        _scan_one(xurl, xtoken, want)
+    return ok
 
 
 def is_youtube(uri: str) -> bool:
