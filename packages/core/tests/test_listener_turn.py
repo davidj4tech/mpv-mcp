@@ -52,9 +52,37 @@ def test_the_same_words_later_or_elsewhere_are_a_new_turn(tmp_path, monkeypatch)
     import time
     import agent_media_core.render.engines as eng
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setattr(eng, "render_text", lambda *a, **k: (False, "no"))
     old = _Store([_row("s1", "hello", time.time() - book_tracks.LISTENER_REPEAT_S - 5)])
-    other = _Store([_row("s2", "hello", time.time() - 1)])
+    other = _Store([_row("s2", "again", time.time() - 1)])
     # Not a repeat, so it goes on to render — and the failed render says False.
     assert book_tracks.record_listener_turn("s1", "hello", store=old) is False
-    assert book_tracks.record_listener_turn("s1", "hello", store=other) is False
+    assert book_tracks.record_listener_turn("s1", "again", store=other) is False
+
+
+def test_two_recorders_at_once_make_one_turn(tmp_path, monkeypatch):
+    """The race the history check cannot catch: both look before either has
+    written. The claim is taken before the render, so the second is refused."""
+    import time
+    import agent_media_core.render.engines as eng
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(eng, "render_text", lambda *a, **k: (False, "no"))
+    now = time.time()
+    assert book_tracks._claim_listener_turn("s1", "hello", now) is True
+    assert book_tracks._claim_listener_turn("s1", "hello", now) is False
+    assert book_tracks._claim_listener_turn("s1", "hello again", now) is True
+    # The second recorder, history still empty, is told it is already a turn.
+    assert book_tracks.record_listener_turn("s1", "hello", store=_Store([])) is True
+
+
+def test_a_stale_claim_is_swept(tmp_path, monkeypatch):
+    import os, time
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    now = time.time()
+    assert book_tracks._claim_listener_turn("s1", "hello", now) is True
+    d = tmp_path / "state" / "agent-media" / "listener-claims"
+    for p in d.iterdir():
+        os.utime(p, (now - 400, now - 400))
+    assert book_tracks._claim_listener_turn("s1", "hello", now) is True

@@ -183,6 +183,38 @@ LISTENER_VOICE = "en-AU-WilliamNeural"
 LISTENER_REPEAT_S = 120.0
 
 
+def _claim_listener_turn(session: str, text: str, now: float) -> bool:
+    """Claim `text` for this session; False if someone already has.
+
+    The history check below is not enough on its own: the two recorders start
+    within the same second and each spends one or two rendering before it
+    writes, so both look, see nothing, and both record. A claim file, created
+    exclusively before any of that, is decided at once. Old claims are swept
+    as they are passed, so the directory never grows past a day's replies.
+    """
+    import hashlib
+
+    d = state_dir() / "listener-claims"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        for p in d.iterdir():
+            try:
+                if now - p.stat().st_mtime > LISTENER_REPEAT_S:
+                    p.unlink()
+            except OSError:
+                pass
+        key = hashlib.sha1(f"{session}\n{text}".encode()).hexdigest()[:24]
+        fd = os.open(str(d / key), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        # A state dir that cannot take a file cannot dedupe; the history check
+        # still stands, and a repeat is better than a lost turn.
+        return True
+
+
 def _listener_turn_recently(store, session: str, text: str, now: float) -> bool:
     """Whether `text` was already recorded as this session's listener turn."""
     try:
@@ -226,6 +258,8 @@ def record_listener_turn(session: str, text: str, *, store=None) -> bool:
     # the repeat is dropped. Same session, same words, within a couple of
     # minutes: already a turn, and reported as one.
     if _listener_turn_recently(st, session, text, at):
+        return True
+    if not _claim_listener_turn(session, text, at):
         return True
     d = cache_dir() / "audio"
     try:
