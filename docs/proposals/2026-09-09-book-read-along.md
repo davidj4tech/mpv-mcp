@@ -111,6 +111,49 @@ upstream-mergeable`: a hook-sized `// Sasonica:` block in the reader that
 polls the local player's position, the lookup in a fork-only module). Worth
 doing only after Path A proves the alignment is good enough to look at.
 
+## Three screens, one stream
+
+David's picture of the room, 2026-09-09: **a TV as the canvas, an e-ink
+tablet for the follow-along text, and a phone playing the audio over
+Bluetooth.** Nothing in it needs a new mechanism — each device is a role the
+system already has — but it changes what the timings file must carry and
+what the e-ink mode is *for*.
+
+- **The phone is the clock.** The book already plays on the phone's mpv,
+  and the canvas server already polls that mpv once a second. Bluetooth adds
+  a couple of hundred milliseconds of audio latency, which is invisible at
+  sentence granularity; it would matter for word-level highlighting, which
+  is one more reason not to start there. Every screen subscribes to the same
+  `{"kind":"book"}` stream.
+- **The tablet is the reader.** Today the Pine Note is a *mirror* of the wall
+  canvas with the video and mid-tones hidden. This makes it a different
+  surface reading the same stream: a paragraph view — the current paragraph
+  set as text, the live sentence in bold, the band gone — refreshed once per
+  sentence, and a page turn at each paragraph boundary. That is the part
+  e-ink does better than any other screen in the house, and it is what
+  Path A should build first.
+- **The TV is the illustrator.** Same page in wall mode, with the subtitle
+  band. The canvas already draws a Venice picture per spoken reply; it can
+  draw one per *scene* of the book, prompted from the sentences around the
+  current position, so the TV becomes ambient illustration that turns with
+  the pages. Rendered ahead of time, one per chapter or per N paragraphs,
+  into the same spool the speech pictures use — playback never waits on an
+  image, and the spool's gc keeps it bounded.
+
+Consequences for the rest of the proposal:
+
+1. **The timings file carries paragraph boundaries**, not just sentences:
+   `{start_s, end_s, chapter, paragraph, text}`. The ePub has them; the
+   aligner must not flatten them. (aeneas aligns at whatever granularity it
+   is given, so this is a matter of how the text is fed in, not a feature.)
+2. **The stream carries the paragraph**, so the tablet does not have to
+   reconstruct it: `{"kind":"book", sentence, paragraph: [..sentences..],
+   sentence_idx, chapter, t, dur, paused}`.
+3. **Illustration is a later step**, after the reader view works. It needs a
+   scene-detection heuristic (every N paragraphs, or a chapter break) and a
+   prompt built from the text, and it is the first place the book channel
+   spends money per book rather than per reply.
+
 ## What it will not do
 
 - **Word-level highlighting** on any e-ink surface. The refresh cannot keep up.
@@ -132,7 +175,8 @@ doing only after Path A proves the alignment is good enough to look at.
    producing `<book>.align.json` with per-sentence confidence. Chapter
    mapping by ordinal, with a `--chapters` override for books whose ePub
    spine and audio tracks disagree.
-3. Path A on the wall canvas, then the Note's paragraph view.
+3. Path A: the Note's paragraph view first, then the wall canvas band,
+   then scene illustration on the TV.
 4. Path B in Sasonica, if 3 gets used.
 
 Cost note: red5 is 4 vCPU and 7 GB. aeneas fits; whisper does not fit
