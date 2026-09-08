@@ -538,3 +538,240 @@ def test_ghost_prompt_is_empty_on_a_bare_prompt(monkeypatch):
 def test_truecolor_params_are_not_mistaken_for_dim():
     runs = reply._dim_runs("\x1b[38;2;10;20;30mplain\x1b[2m ghost\x1b[22m back")
     assert runs == [("plain", False), (" ghost", True), (" back", False)]
+
+
+# --- a fresh session from the phone ---------------------------------------------
+
+def _amux(tmp_path, monkeypatch, body):
+    d = tmp_path / "amux" / "sessions"
+    d.mkdir(parents=True)
+    (d / "scratch.env").write_text(body)
+    monkeypatch.setenv("CC_HOME", str(tmp_path / "amux"))
+    for k in ("MEDIA_ASK_SESSION", "MEDIA_ASK_TMUX", "MEDIA_ASK_CWD", "MEDIA_ASK_FLAGS"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_ask_target_copies_the_amux_registration(tmp_path, monkeypatch):
+    _amux(tmp_path, monkeypatch,
+          '# amux session: scratch\nCC_NAME="scratch"\nCC_DIR="/home/ryer/scratch"\n'
+          'CC_FLAGS="--dangerously-skip-permissions"\n')
+    assert reply.ask_target() == ("amux-scratch", "/home/ryer/scratch",
+                                  ["--dangerously-skip-permissions"])
+
+
+def test_ask_target_parts_can_be_overridden(tmp_path, monkeypatch):
+    _amux(tmp_path, monkeypatch, 'CC_DIR="/home/ryer/scratch"\nCC_FLAGS="--yolo"\n')
+    monkeypatch.setenv("MEDIA_ASK_TMUX", "1")
+    monkeypatch.setenv("MEDIA_ASK_FLAGS", "")
+    assert reply.ask_target() == ("1", "/home/ryer/scratch", [])
+
+
+def test_ask_target_without_a_registration_is_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CC_HOME", str(tmp_path / "nowhere"))
+    for k in ("MEDIA_ASK_SESSION", "MEDIA_ASK_TMUX", "MEDIA_ASK_CWD", "MEDIA_ASK_FLAGS"):
+        monkeypatch.delenv(k, raising=False)
+    host, cwd, flags = reply.ask_target()
+    assert host == "amux-scratch" and cwd and flags == []
+
+
+def test_session_of_pane_waits_for_a_live_claude(tmp_path, monkeypatch):
+    import os
+    monkeypatch.setenv("MEDIA_PANE_REGISTRY_DIR", str(tmp_path))
+    # A row naming a dead pid is the previous tenant of a recycled pane.
+    (tmp_path / "9").write_text("11111111-2222-3333-4444-555555555555 999999999 /x")
+    assert reply.session_of_pane("%9", timeout=0.3) == ""
+    # This process is not `claude` either; only a pid-less legacy row is trusted.
+    (tmp_path / "9").write_text(f"11111111-2222-3333-4444-555555555555 {os.getpid()} /x")
+    assert reply.session_of_pane("%9", timeout=0.3) == ""
+    (tmp_path / "9").write_text("11111111-2222-3333-4444-555555555555")
+    assert reply.session_of_pane("%9", timeout=0.3) == "11111111-2222-3333-4444-555555555555"
+
+
+def test_open_window_targets_the_host_and_passes_flags(monkeypatch):
+    calls = []
+
+    def fake_tmux(argv, timeout=10):
+        calls.append(argv)
+        return "%4" if argv[0] == "new-window" else ""
+
+    monkeypatch.setattr(reply, "_tmux", fake_tmux)
+    monkeypatch.setattr(reply, "ensure_host", lambda h, c: True)
+    monkeypatch.setattr(reply, "pane_ready", lambda p: True)
+    monkeypatch.setattr(reply, "_claude_bin", lambda: "/home/ryer/.local/bin/claude")
+    monkeypatch.setattr(reply, "attached_session", lambda: pytest.fail("host was given"))
+    pane, err = reply.open_window("", "/home/ryer/scratch", resume=False,
+                                  host="amux-scratch", flags=["--dangerously-skip-permissions"])
+    assert (pane, err) == ("%4", "")
+    nw = next(c for c in calls if c[0] == "new-window")
+    assert nw[nw.index("-t") + 1] == "amux-scratch:"
+    assert nw[-1] == "exec env -u ANTHROPIC_API_KEY /home/ryer/.local/bin/claude --dangerously-skip-permissions"
+
+
+def test_open_window_refuses_a_host_it_cannot_hold(monkeypatch):
+    monkeypatch.setattr(reply, "ensure_host", lambda h, c: False)
+    pane, err = reply.open_window("", "/x", resume=False, host="amux-scratch")
+    assert pane == "" and "amux-scratch" in err
+
+
+def test_hold_client_is_a_no_op_when_someone_is_attached(monkeypatch):
+    monkeypatch.setattr(reply, "_has_client", lambda h: True)
+    monkeypatch.setattr(reply.subprocess, "run", lambda *a, **k: pytest.fail("no holder needed"))
+    monkeypatch.setattr(reply.subprocess, "Popen", lambda *a, **k: pytest.fail("no holder needed"))
+    assert reply.hold_client("amux-scratch", "/x") is True
+
+
+def test_hold_client_creates_the_session_attached_in_its_own_unit(monkeypatch):
+    seen = {"n": 0}
+    runs = []
+
+    def has_client(h):
+        seen["n"] += 1
+        return seen["n"] > 2      # nobody at first; there once the holder is up
+
+    class Done:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(reply, "_has_client", has_client)
+    monkeypatch.setattr(reply.shutil, "which", lambda n: "/usr/bin/systemd-run")
+    monkeypatch.setattr(reply.subprocess, "run", lambda argv, **k: runs.append(argv) or Done())
+    monkeypatch.setattr(reply.subprocess, "Popen", lambda *a, **k: pytest.fail("in-process holder"))
+    reply._HOLDERS.clear()
+    assert reply.hold_client("amux-scratch", "/home/ryer/scratch") is True
+    run = next(r for r in runs if r[0] == "systemd-run")
+    assert "--unit=agent-media-tmux-hold-amux-scratch" in run
+    assert "--setenv=SHELL=/bin/sh" in run and "--setenv=TERM=xterm-256color" in run
+    assert run[-3:] == ["-qfc", "tmux new-session -A -s amux-scratch -c /home/ryer/scratch",
+                        "/dev/null"]
+    assert run[-4] == "script"
+
+
+def test_hold_client_falls_back_to_an_in_process_holder(monkeypatch):
+    seen = {"n": 0}
+    spawned = []
+
+    class Proc:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(reply, "_has_client", lambda h: (seen.__setitem__("n", seen["n"] + 1) or seen["n"] > 2))
+    monkeypatch.setattr(reply.shutil, "which", lambda n: None)
+    monkeypatch.setattr(reply.subprocess, "Popen", lambda argv, **k: spawned.append((argv, k)) or Proc())
+    reply._HOLDERS.clear()
+    assert reply.hold_client("amux-scratch", "/x") is True
+    argv, kw = spawned[0]
+    assert argv[0] == "script" and kw["env"]["SHELL"] == "/bin/sh"
+    reply._HOLDERS.clear()
+
+
+@pytest.fixture
+def _asker(monkeypatch, tmp_path):
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t: None)
+    monkeypatch.setattr(reply, "_settle", lambda p, timeout=5.0: None)
+    monkeypatch.setattr(reply, "_ensure_submitted", lambda p, t, timeout=3.0: None)
+    monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
+    monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
+    _amux(tmp_path, monkeypatch, 'CC_DIR="/home/ryer/scratch"\nCC_FLAGS="--yolo"\n')
+
+
+def test_ask_opens_a_fresh_window_and_types_the_first_message(monkeypatch, _asker):
+    from agent_media_visual import canvas
+    opened, sent, shelved = [], [], []
+    monkeypatch.setattr(reply, "open_window",
+                        lambda s, cwd, *, resume, host="", flags=(): opened.append((s, cwd, resume, host, list(flags))) or ("%9", ""))
+    monkeypatch.setattr(reply, "session_of_pane", lambda p, timeout=10.0: "11111111-2222-3333-4444-555555555555")
+    monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: sent.append((p, t)) or "")
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t: shelved.append((s, t)))
+    ok, detail = reply.ask("what is the time", "tok", quote="a turn")
+    assert ok is True
+    assert detail == {"session": "11111111-2222-3333-4444-555555555555", "pane": "%9",
+                      "opened": True, "fresh": True, "tmux": "amux-scratch"}
+    assert opened == [("", "/home/ryer/scratch", False, "amux-scratch", ["--yolo"])]
+    assert sent == [("%9", 'Re: "a turn" — what is the time')]
+    assert shelved == [("11111111-2222-3333-4444-555555555555", "what is the time")]
+
+
+def test_ask_without_a_uuid_still_delivers_but_shelves_nothing(monkeypatch, _asker):
+    from agent_media_visual import canvas
+    shelved = []
+    monkeypatch.setattr(reply, "open_window", lambda *a, **k: ("%9", ""))
+    monkeypatch.setattr(reply, "session_of_pane", lambda p, timeout=10.0: "")
+    monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: "")
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t: shelved.append(1))
+    ok, detail = reply.ask("hi", "tok")
+    assert ok is True and detail["session"] is None and shelved == []
+
+
+def test_ask_refuses_an_empty_message_before_opening_anything(monkeypatch, _asker):
+    monkeypatch.setattr(reply, "open_window", lambda *a, **k: pytest.fail("opened"))
+    ok, detail = reply.ask("   ", "tok")
+    assert ok is False and "empty" in detail["error"]
+
+
+def test_ask_refuses_a_user_who_may_not_type(monkeypatch, _asker):
+    monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "guest", "type": "user"}, 200))
+    monkeypatch.setattr(reply, "open_window", lambda *a, **k: pytest.fail("opened"))
+    ok, detail = reply.ask("hi", "tok")
+    assert ok is False and detail["status"] == 403
+
+
+def test_ask_reports_a_window_that_never_came_up(monkeypatch, _asker):
+    monkeypatch.setattr(reply, "open_window", lambda *a, **k: ("%9", "%9 did not come up"))
+    ok, detail = reply.ask("hi", "tok")
+    assert ok is False and "did not come up" in detail["error"]
+
+
+def test_conversation_for_session_says_not_yet_until_the_item_exists(tmp_path, monkeypatch):
+    sid = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
+    monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
+    monkeypatch.setattr(reply, "live_sessions", lambda: {sid: "%9"})
+    monkeypatch.setattr(reply, "session_exists", lambda s: True)
+    _manifests(tmp_path, monkeypatch, [])
+    ok, detail = reply.conversation_for_session(sid, "tok")
+    assert ok is True and detail["item"] is None and detail["live"] is True
+    (tmp_path / "book-tracks" / f"{sid}.json").write_text(json.dumps(
+        {"session": sid, "folder": "/home/ryer/conversations/scratch/scratch - Time"}))
+    from agent_media_core import book_tracks
+    monkeypatch.setattr(book_tracks, "_abs_ready", lambda target=None: ("http://abs", "svc", [{"id": "lib"}]))
+    monkeypatch.setattr(book_tracks, "_find_item", lambda url, tok, libs, folder: {"id": "li_42", "path": str(folder)})
+    ok, detail = reply.conversation_for_session(sid, "tok")
+    assert ok is True and detail["item"] == "li_42"
+
+
+def test_conversation_for_session_rejects_a_non_uuid():
+    ok, detail = reply.conversation_for_session("../etc", "tok")
+    assert ok is False and detail["status"] == 400
+
+
+def test_settle_returns_once_the_screen_stops_changing(monkeypatch):
+    frames = iter(["a", "b", "c", "c", "d"])
+    monkeypatch.setattr(reply, "_capture_pane", lambda p: next(frames))
+    monkeypatch.setattr(reply.time, "sleep", lambda s: None)
+    reply._settle("%1")
+    assert next(frames) == "d"        # stopped at the first repeat, not the end
+
+
+def test_ensure_submitted_presses_enter_when_the_text_is_still_in_the_box(monkeypatch):
+    sent = []
+    monkeypatch.setattr(reply, "_capture_pane",
+                        lambda p: "─────\n❯ what is the time today\n─────\n  ⏵⏵ bypass permissions on")
+    monkeypatch.setattr(reply, "_tmux", lambda argv, timeout=10: sent.append(argv) or "")
+    monkeypatch.setattr(reply.time, "sleep", lambda s: None)
+    reply._ensure_submitted("%1", "what is the time today", timeout=0.01)
+    assert sent == [["send-keys", "-t", "%1", "Enter"]]
+
+
+def test_ensure_submitted_leaves_a_working_session_alone(monkeypatch):
+    monkeypatch.setattr(reply, "_capture_pane",
+                        lambda p: "· ↑ 1.2k tokens · esc to interrupt\n❯ \n  ⏵⏵ bypass permissions on")
+    monkeypatch.setattr(reply, "_tmux", lambda argv, timeout=10: pytest.fail("pressed Enter"))
+    monkeypatch.setattr(reply.time, "sleep", lambda s: None)
+    reply._ensure_submitted("%1", "what is the time today", timeout=0.01)
+
+
+def test_ensure_submitted_trusts_an_empty_box(monkeypatch):
+    monkeypatch.setattr(reply, "_capture_pane", lambda p: "❯ \n  ⏵⏵ bypass permissions on")
+    monkeypatch.setattr(reply, "_tmux", lambda argv, timeout=10: pytest.fail("pressed Enter"))
+    monkeypatch.setattr(reply.time, "sleep", lambda s: None)
+    reply._ensure_submitted("%1", "what is the time today", timeout=0.01)

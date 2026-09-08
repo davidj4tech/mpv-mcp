@@ -27,6 +27,10 @@ Config (env):
   MEDIA_REPLY_ROOT    "0" to stop treating the ABS root account as allowed
   MEDIA_REPLY_TMUX    tmux session to open revived windows in (default: the
                       one with an attached client)
+  MEDIA_ASK_SESSION   amux session name whose registration (directory, flags)
+                      a fresh session started from the phone copies
+                      (default: scratch); MEDIA_ASK_TMUX / MEDIA_ASK_CWD /
+                      MEDIA_ASK_FLAGS override its parts
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ import json
 import logging
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -474,8 +480,107 @@ def pane_ready(pane: str) -> bool:
     return False
 
 
-def open_window(session: str, cwd: str, *, resume: bool) -> tuple[str, str]:
+# A tmux session with nobody attached cannot host a Claude Code TUI (see
+# `attached_session`), and the scratch session a phone-started chat goes into
+# is exactly the kind nobody is looking at. So a client is held on it:
+# `script` gives `tmux` the tty it insists on, and `new-session -A` creates
+# the session attached from its first moment — which matters twice over. A
+# session born detached loses its only window to the after-new-session hook
+# (tmux-claude-resume respawns an unattended window as a `claude --resume`,
+# which then dies for want of a client, and the empty session goes with it);
+# the hook skips sessions that have a client. And the holder lives in its own
+# transient systemd unit, not this process: the canvas restarts on every
+# deploy, and a chat started from the phone must not die with it.
+_HOLD_UNIT = "agent-media-tmux-hold-{host}"
+_HOLDERS: dict[str, subprocess.Popen] = {}
+_HOLDER_LOCK = threading.Lock()
+
+
+def _has_client(host: str) -> bool:
+    return bool(_tmux(["list-clients", "-t", f"={host}", "-F", "#{client_tty}"]))
+
+
+def _holder_argv(host: str, cwd: str) -> list[str]:
+    # $SHELL runs `script -c`, and under the user manager that is zsh, whose
+    # `=word` expansion eats a `-t =name` target — so the shell is pinned and
+    # the target is `-s name`, which needs no exact-match prefix.
+    return ["script", "-qfc", f"tmux new-session -A -s {shlex.quote(host)} -c {shlex.quote(cwd)}",
+            "/dev/null"]
+
+
+def hold_client(host: str, cwd: str = "") -> bool:
+    """Keep a client attached to tmux session `host`, creating it if need be.
+
+    Whether one is attached by the time this returns.
+    """
+    if _has_client(host):
+        return True
+    cwd = cwd or os.path.expanduser("~")
+    env = {"TERM": "xterm-256color", "SHELL": "/bin/sh"}
+    with _HOLDER_LOCK:
+        held = _HOLDERS.get(host)
+        if held is None or held.poll() is not None:
+            unit = _HOLD_UNIT.format(host=re.sub(r"[^A-Za-z0-9_.-]", "-", host))
+            argv = _holder_argv(host, cwd)
+            spawned = False
+            if shutil.which("systemd-run"):
+                # A stopped unit of that name may linger failed; clear it.
+                subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.service"],
+                               capture_output=True, check=False)
+                r = subprocess.run(["systemd-run", "--user", "--collect", f"--unit={unit}",
+                                    *[f"--setenv={k}={v}" for k, v in env.items()], *argv],
+                                   capture_output=True, text=True, check=False)
+                spawned = r.returncode == 0
+                if not spawned:
+                    log.warning("reply: systemd-run holder failed (%s); holding in-process",
+                                r.stderr.strip()[:200])
+            if not spawned:
+                try:
+                    _HOLDERS[host] = subprocess.Popen(
+                        argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, start_new_session=True,
+                        env={**os.environ, **env})
+                except OSError as e:
+                    log.warning("reply: could not hold a client on %s (%s)", host, e)
+                    return False
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if _has_client(host):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def ensure_host(host: str, cwd: str) -> bool:
+    """Make tmux session `host` exist, with a client on it. Whether it does."""
+    return hold_client(host, cwd)
+
+
+def _claude_bin() -> str:
+    """Where `claude` is, by absolute path.
+
+    A window's command runs with whatever PATH the tmux session was born
+    with, and a session the canvas made from under systemd has the user
+    manager's — no ~/.local/bin, no bun, no npm — so `claude` was "not found"
+    in a window that looked exactly like a working one.
+    """
+    home = Path.home()
+    extra = [home / ".local" / "bin", home / ".bun" / "bin", home / ".npm-global" / "bin",
+             home / ".claude" / "local", Path("/usr/local/bin"),
+             # fnm puts the live node on PATH through a per-shell symlink dir
+             # under /run; its `default` alias is the stable name for it.
+             home / ".local" / "share" / "fnm" / "aliases" / "default" / "bin"]
+    path = os.pathsep.join([os.environ.get("PATH") or "", *map(str, extra)])
+    return shutil.which("claude", path=path) or "claude"
+
+
+def open_window(session: str, cwd: str, *, resume: bool, host: str = "",
+                flags: tuple[str, ...] | list[str] = ()) -> tuple[str, str]:
     """Open a background tmux window running Claude Code. `(pane, error)`.
+
+    `host` names the tmux session to open it in; by default the one someone is
+    attached to. `flags` go to `claude` (a fresh session may want
+    `--dangerously-skip-permissions`; a revived one wants nothing).
 
     Background (`-d`) on purpose: this is triggered from the phone, and a
     window that steals the desk's focus mid-task is a worse answer than one
@@ -492,13 +597,19 @@ def open_window(session: str, cwd: str, *, resume: bool) -> tuple[str, str]:
       own queue for a minute or two before it is read. That is why the caller
       is told `opened: true` — "opening" is a truer thing to show than "sent".
     """
-    host = attached_session()
-    if not host:
-        return "", "no attached tmux session to open a window in"
     cwd = cwd or os.path.expanduser("~")
-    cmd = "exec env -u ANTHROPIC_API_KEY claude"
+    if host:
+        if not ensure_host(host, cwd):
+            return "", f"could not get a client onto tmux session {host!r}"
+    else:
+        host = attached_session()
+        if not host:
+            return "", "no attached tmux session to open a window in"
+    cmd = f"exec env -u ANTHROPIC_API_KEY {shlex.quote(_claude_bin())}"
     if resume:
         cmd += f" --resume {session}"
+    if flags:
+        cmd += " " + shlex.join(list(flags))
     # "host:" not "host": a bare name is a target *window*, and tmux happily
     # resolves it into some other session's window (verified the hard way).
     pane = _tmux(["new-window", "-d", "-t", f"{host}:", "-c", cwd,
@@ -532,6 +643,209 @@ def focus(pane: str) -> tuple[bool, str]:
     _tmux(["select-window", "-t", win])
     _tmux(["select-pane", "-t", pane])
     return True, pane
+
+
+def _registry_dir() -> Path:
+    return Path(os.path.expanduser(os.environ.get("MEDIA_PANE_REGISTRY_DIR")
+                                   or "~/.claude/tmux-sessions"))
+
+
+def session_of_pane(pane: str, timeout: float = 10.0) -> str:
+    """The uuid of the Claude Code session running in `pane`, or "".
+
+    A fresh session's uuid is in nobody's argv; the SessionStart hook writes it
+    to the pane registry a moment after the TUI is up, so this waits for the
+    row and believes it only when the pid it names is a live `claude` — a
+    recycled pane id can otherwise hand back the previous tenant.
+    """
+    row = _registry_dir() / pane.lstrip("%")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            parts = row.read_text().split()
+        except OSError:
+            parts = []
+        if parts:
+            pid = parts[1] if len(parts) > 1 else ""
+            if pid:
+                try:
+                    cmd0 = Path("/proc", pid, "cmdline").read_bytes().split(b"\0")[0]
+                    alive = os.path.basename(cmd0.decode(errors="replace")) == "claude"
+                except OSError:
+                    alive = False
+            else:
+                alive = True             # a legacy row without a pid: trust it
+            if alive:
+                return parts[0]
+        if time.monotonic() >= deadline:
+            return ""
+        time.sleep(0.25)
+
+
+# --- a fresh session, from the phone -------------------------------------------
+
+def ask_target() -> tuple[str, str, list[str]]:
+    """`(tmux session, cwd, claude flags)` for a session started from the phone.
+
+    Copied from the amux registration named by MEDIA_ASK_SESSION (default
+    `scratch`) — the same directory and flags `amux start scratch` would use,
+    in the tmux session amux would put it in — so where a phone-started chat
+    lands is set in one place, with amux. Each part can be overridden.
+    """
+    name = (os.environ.get("MEDIA_ASK_SESSION") or "scratch").strip()
+    cwd, flags = "", ""
+    env = Path(os.path.expanduser(os.environ.get("CC_HOME") or "~/.amux")) / "sessions" / f"{name}.env"
+    try:
+        for line in env.read_text().splitlines():
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            if k == "CC_DIR":
+                cwd = v
+            elif k == "CC_FLAGS":
+                flags = v
+    except OSError:
+        pass
+    host = (os.environ.get("MEDIA_ASK_TMUX") or "").strip() or f"amux-{name}"
+    cwd = os.path.expanduser((os.environ.get("MEDIA_ASK_CWD") or "").strip() or cwd or "~")
+    flags_s = os.environ.get("MEDIA_ASK_FLAGS")
+    argv = shlex.split(flags_s if flags_s is not None else flags)
+    return host, cwd, argv
+
+
+def _settle(pane: str, timeout: float = 5.0) -> None:
+    """Wait until the screen in `pane` stops changing (or `timeout` passes).
+
+    `pane_ready` says yes at the first sight of Claude Code's chrome, and the
+    TUI is still painting for a moment after that: a message typed then is
+    taken but its Enter is not, and it sits in the box unsent. Two identical
+    captures a beat apart is the TUI at rest.
+    """
+    last = _capture_pane(pane)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.7)
+        now = _capture_pane(pane)
+        if now == last:
+            return
+        last = now
+
+
+def _ensure_submitted(pane: str, text: str, timeout: float = 3.0) -> None:
+    """Press Enter again if `text` is still sitting in the input box.
+
+    Looked at rather than assumed: the composer shows what it holds, so
+    "still in the box" is the first words of the message after the prompt
+    glyph with no sign of a turn in progress.
+    """
+    from . import canvas
+
+    head = " ".join(text.split())[:24]
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        cap = canvas._strip_ansi(_capture_pane(pane))
+        if canvas._classify_cc(cap) == "working":
+            return
+        flat = " ".join(cap.split())
+        i = flat.rfind(_PROMPT_GLYPH)
+        if i < 0 or head not in flat[i:]:
+            return
+    _tmux(["send-keys", "-t", pane, "Enter"])
+
+
+def ask(text: str, bearer: str, *, quote: str = "") -> tuple[bool, dict]:
+    """Start a fresh Claude Code session with `text` as its first message.
+
+    What the phone's assistant button does. Nothing to resume and no item yet:
+    the window opens in the scratch session, the words are typed in, and the
+    listener's turn is shelved against the new session's uuid so the
+    conversation appears in the library once its first reply is spoken. The
+    app is told the uuid and polls `/conversation?session=` for the item.
+    """
+    from . import canvas
+
+    text = " ".join((text or "").split())
+    if not text:
+        return False, {"error": "empty message"}
+    user, status = abs_identity(bearer)
+    if not user:
+        return False, _identity_error(status)
+    ok, why = may_reply(user)
+    if not ok:
+        return False, {"error": why, "status": 403}
+    host, cwd, flags = ask_target()
+    pane, err = open_window("", cwd, resume=False, host=host, flags=flags)
+    if err:
+        return False, {"error": err, "pane": pane or None}
+    session = session_of_pane(pane)
+    _settle(pane)
+    body = compose(text, quote)
+    send_err = canvas._send_to_pane(pane, body)
+    if send_err:
+        return False, {"error": send_err, "session": session or None, "pane": pane}
+    _ensure_submitted(pane, body)
+    if session:
+        _record_turn(session, text)
+    return True, {"session": session or None, "pane": pane, "opened": True,
+                  "fresh": True, "tmux": host}
+
+
+def _folder_for_session(session: str) -> str:
+    for f in sorted(_manifest_dir().glob("*.json")):
+        try:
+            data = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if str(data.get("session") or f.stem) == session:
+            return str(data.get("folder") or "")
+    return ""
+
+
+def item_for_session(session: str) -> str | None:
+    """The ABS library item id behind `session`, or None until it has one.
+
+    None means "not yet" as often as "never": the item exists once a turn has
+    been exported (a minute's debounce) and ABS has scanned the folder.
+    """
+    folder = _folder_for_session(session)
+    if not folder:
+        return None
+    try:
+        from agent_media_core import book_tracks
+
+        ready = book_tracks._abs_ready()
+        if not ready:
+            return None
+        url, token, libs = ready
+        item = book_tracks._find_item(url, token, libs, Path(folder))
+    except Exception as e:  # noqa: BLE001 — "not yet" is the honest answer
+        log.warning("reply: item lookup for %s failed (%s)", session[:8], e)
+        return None
+    return str(item.get("id")) if item and item.get("id") else None
+
+
+def conversation_for_session(session: str, bearer: str) -> tuple[bool, dict]:
+    """`/conversation?session=`: where a session started from the phone got to.
+
+    Same gates as `conversation`. The answer is `ok` from the first poll —
+    the session is real — and `item` fills in when the library has it.
+    """
+    session = (session or "").strip()
+    if not _UUID.fullmatch(session):
+        return False, {"error": "not a session id", "status": 400}
+    user, status = abs_identity(bearer)
+    if not user:
+        return False, _identity_error(status)
+    ok, why = may_reply(user)
+    if not ok:
+        return False, {"error": why, "status": 403}
+    pane = live_sessions().get(session, "")
+    return True, {"session": session, "item": item_for_session(session),
+                  "live": bool(pane), "pane": pane or None,
+                  "resumable": session_exists(session)}
 
 
 # --- the whole move -----------------------------------------------------------

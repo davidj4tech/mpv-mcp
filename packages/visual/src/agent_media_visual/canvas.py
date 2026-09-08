@@ -21,6 +21,12 @@ Stdlib-only HTTP server. Endpoints:
                    "mode": "continue"|"branch"} + an Audiobookshelf bearer →
                   type into the session behind that conversation, reviving it
                   in a background tmux window if it has ended
+  GET  /conversation?session=<uuid>   + an Audiobookshelf bearer →
+                  a session the phone started: its item id once the library
+                  has one, and whether it is live
+  POST /ask       {"text": "...", "quote": "..."} + an Audiobookshelf bearer →
+                  start a FRESH session in the scratch tmux session with that
+                  as its first message (the assistant button, "new chat")
   POST /focus     {"pane": "%23"} → bring the attached tmux client to a pane
   GET  /healthz   liveness
 
@@ -1414,11 +1420,17 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/conversation":
             # "Is this item a conversation I can reply to?" — what the app asks
             # before it draws the reply box. Authed by the caller's own ABS
-            # bearer, like /reply.
+            # bearer, like /reply. `?session=` instead of `?item=` asks the
+            # other way round: a session the phone just started (see /ask),
+            # and whether the library has an item for it yet.
             from . import reply as _reply
-            item = parse_qs(self.path.partition("?")[2]).get("item", [""])[0]
+            qs = parse_qs(self.path.partition("?")[2])
+            item = qs.get("item", [""])[0]
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer").strip()
-            ok, detail = _reply.conversation(item, bearer)
+            if qs.get("session", [""])[0] and not item:
+                ok, detail = _reply.conversation_for_session(qs["session"][0], bearer)
+            else:
+                ok, detail = _reply.conversation(item, bearer)
             self._json(200 if ok else detail.pop("status", 404),
                        {"ok": ok, **detail})
         elif path == "/conversation/log":
@@ -1592,6 +1604,20 @@ class Handler(BaseHTTPRequestHandler):
             status = detail.pop("status", 400)
             if not ok:
                 print(f"reply: refused {status} ({detail.get('error')}) "
+                      f"from {self.client_address[0]}", file=sys.stderr)
+            self._json(200 if ok else status, {"ok": ok, **detail})
+        elif path == "/ask":
+            # A fresh session from the phone: the assistant button, or "new
+            # chat" in the app. Gated like /reply — the ABS bearer is the
+            # credential — and it lands in the scratch tmux session.
+            from . import reply as _reply
+            body = self._read_json() or {}
+            bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer").strip()
+            ok, detail = _reply.ask(str(body.get("text") or ""), bearer,
+                                    quote=str(body.get("quote") or ""))
+            status = detail.pop("status", 400)
+            if not ok:
+                print(f"ask: refused {status} ({detail.get('error')}) "
                       f"from {self.client_address[0]}", file=sys.stderr)
             self._json(200 if ok else status, {"ok": ok, **detail})
         elif path == "/focus":
