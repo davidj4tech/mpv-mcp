@@ -248,7 +248,16 @@ def session_for_item(item_id: str, bearer: str) -> tuple[str | None, str]:
     item, _status = _abs_get(url, bearer, f"/api/items/{item_id}")
     if not item:
         return None, "no such item"
-    tail = _tail(item.get("path") or "")
+    return session_for_path(item.get("path") or "")
+
+
+def session_for_path(path: str) -> tuple[str | None, str]:
+    """The session uuid behind an item's folder, or (None, why not).
+
+    The half of `session_for_item` that needs no server: a caller already
+    holding the item (the `/item` route does) can ask this directly.
+    """
+    tail = _tail(path or "")
     if not tail:
         return None, "item has no path"
     for f in sorted(_manifest_dir().glob("*.json")):

@@ -225,3 +225,60 @@ def test_an_answer_that_is_not_an_item_is_a_502(monkeypatch):
                         lambda b: "http://abs.example")
     ok, err = item_mod.item_for_app("li_1", "tok")
     assert (ok, err["status"]) == (False, 502)
+
+
+# --- is it a conversation -----------------------------------------------------
+
+def _serve(monkeypatch, item):
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return json.dumps(item).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(item_mod.urllib.request, "urlopen",
+                        lambda req, timeout=0: _Resp())
+    monkeypatch.setattr("agent_media_visual.reply.abs_identity",
+                        lambda b: ({"username": "root", "type": "root"}, 200))
+    monkeypatch.setattr("agent_media_visual.reply.abs_home",
+                        lambda b: "http://abs.example")
+
+
+def _manifests(tmp_path, monkeypatch, rows):
+    d = tmp_path / "book-tracks"
+    d.mkdir()
+    for session, folder in rows:
+        (d / f"{session}.json").write_text(
+            json.dumps({"session": session, "folder": folder}))
+    monkeypatch.setattr("agent_media_visual.reply._manifest_dir", lambda: d)
+
+
+def test_an_item_with_a_session_behind_it_is_flagged_a_conversation(tmp_path, monkeypatch):
+    _manifests(tmp_path, monkeypatch, [("abc-1", "/x/scratch/scratch - Drones")])
+    _serve(monkeypatch, {**_item(), "path": "/conversations/scratch/scratch - Drones"})
+    ok, out = item_mod.item_for_app("li_1", "tok")
+    assert ok and out["conversation"] is True
+
+
+def test_an_ordinary_book_is_not(tmp_path, monkeypatch):
+    _manifests(tmp_path, monkeypatch, [("abc-1", "/x/scratch/scratch - Drones")])
+    _serve(monkeypatch, {**_item(), "path": "/audiobooks/Dune"})
+    ok, out = item_mod.item_for_app("li_1", "tok")
+    assert ok and out["conversation"] is False
+
+
+def test_a_conversation_the_caller_may_not_reply_to_is_a_book_to_them(tmp_path, monkeypatch):
+    # The flag mirrors /conversation exactly: a page that opens as a chat must
+    # always get its reply box, so the gate that decides the box decides this.
+    _manifests(tmp_path, monkeypatch, [("abc-1", "/x/scratch/scratch - Drones")])
+    _serve(monkeypatch, {**_item(), "path": "/conversations/scratch/scratch - Drones"})
+    monkeypatch.setattr("agent_media_visual.reply.may_reply",
+                        lambda user: (False, "no"))
+    ok, out = item_mod.item_for_app("li_1", "tok")
+    assert ok and out["conversation"] is False

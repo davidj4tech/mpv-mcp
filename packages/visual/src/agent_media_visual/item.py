@@ -127,4 +127,14 @@ def item_for_app(item_id: str, bearer: str) -> tuple[bool, dict]:
         return False, reply._identity_error(0)
     if not isinstance(item, dict) or not item.get("id"):
         return False, {"error": "Audiobookshelf sent no item", "status": 502}
-    return True, slim_item(item)
+    out = slim_item(item)
+    # Whether this is a conversation the caller may take part in — the same
+    # answer `/conversation` gives, settled here so the app can choose the chat
+    # layout before it draws anything, instead of drawing a book page and
+    # rearranging it once the reply box has asked. Same two gates, so a page
+    # that opens as a chat always gets its reply box.
+    session = None
+    if reply.may_reply(user)[0]:
+        session, _why = reply.session_for_path(item.get("path") or "")
+    out["conversation"] = bool(session)
+    return True, out
