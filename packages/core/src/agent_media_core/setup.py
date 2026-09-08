@@ -47,7 +47,9 @@ HOOK_MATCH_SUBSTRINGS = (
     "claude-code-tts-hook",
 )
 CLAUDE_HOOK_TIMEOUT = 30
-CLAUDE_HOOK_EVENTS = ("Stop", "Notification")
+# UserPromptSubmit records what the listener typed, so the transcript on the
+# shelf has the questions as well as the answers.
+CLAUDE_HOOK_EVENTS = ("Stop", "Notification", "UserPromptSubmit")
 
 
 def claude_settings_path() -> Path:

@@ -165,3 +165,52 @@ def test_a_pane_with_no_window_name_sends_only_what_it_has(monkeypatch):
     monkeypatch.setenv("TMUX_PANE", "%1")
     _tmux_says(monkeypatch, "work\t")
     assert H._source_place() == {"pane": "%1", "tmux": "work"}
+
+
+# --- UserPromptSubmit: the listener's typed words reach the transcript ---------
+
+def _capture_record(monkeypatch):
+    seen = []
+
+    class _BT:
+        @staticmethod
+        def record_listener_turn(session, text):
+            seen.append((session, text))
+            return True
+
+    import agent_media_core
+    monkeypatch.setattr(agent_media_core, "book_tracks", _BT, raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "agent_media_core.book_tracks", _BT)
+    monkeypatch.setenv("MEDIA_HOOK_NO_DETACH", "1")
+    return seen
+
+
+def test_a_typed_prompt_is_recorded_as_a_listener_turn(monkeypatch):
+    seen = _capture_record(monkeypatch)
+    assert H._handle_user_prompt(
+        {"prompt": "  this chat  doesn't\nshow up ", "session_id": "s-1"}) == 0
+    assert seen == [("s-1", "this chat doesn't show up")]
+
+
+def test_slash_commands_and_empties_are_not_conversation(monkeypatch):
+    seen = _capture_record(monkeypatch)
+    for prompt in ["/loop 5m foo", "", "   ", None]:
+        H._handle_user_prompt({"prompt": prompt, "session_id": "s-1"})
+    H._handle_user_prompt({"prompt": "hello"})   # no session: nowhere to file it
+    assert seen == []
+
+
+def test_a_paste_is_skipped_not_truncated(monkeypatch):
+    seen = _capture_record(monkeypatch)
+    H._handle_user_prompt({"prompt": "x" * (H.PROMPT_RECORD_LIMIT + 1), "session_id": "s-1"})
+    assert seen == []
+
+
+def test_main_routes_the_event(monkeypatch):
+    seen = _capture_record(monkeypatch)
+    import io, json
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(
+        {"hook_event_name": "UserPromptSubmit", "prompt": "hi", "session_id": "s-2"})))
+    monkeypatch.setattr(H, "load_env_file", lambda name: None)
+    assert H.main() == 0
+    assert seen == [("s-2", "hi")]

@@ -10,6 +10,9 @@ Settings.json wires it as (note `"async": true` — see below):
       "Stop":         [{"hooks":[{"type":"command",
                                   "command":"media-hook-claude-code",
                                   "async":true,"timeout":120}]}],
+      "UserPromptSubmit": [{"hooks":[{"type":"command",
+                                  "command":"media-hook-claude-code",
+                                  "async":true,"timeout":30}]}],
       "Notification": [{"hooks":[{"type":"command",
                                   "command":"media-hook-claude-code",
                                   "async":true,"timeout":30}]}],
@@ -980,6 +983,72 @@ def _handle_stop(payload: dict) -> int:
     return 0
 
 
+# A prompt longer than this is a paste — a log, a diff, a document — not a
+# line in a conversation, and rendering it would put minutes of a synthetic
+# voice reading code onto the shelf. Skipped rather than truncated: a cut-off
+# transcript line reads as a bug, a missing one reads as a paste.
+PROMPT_RECORD_LIMIT = 2000
+
+
+def _handle_user_prompt(payload: dict) -> int:
+    """UserPromptSubmit — the listener's own words, typed at the keyboard.
+
+    A reply sent from the player is recorded as a listener turn by the canvas
+    (reply.py) and shows up in the transcript; a prompt typed into the terminal
+    went nowhere, so a conversation read back from the shelf had every answer
+    and none of the questions. This records it by the same path — rendered in
+    the listener's voice, one history row, the shelf publish armed — so the
+    transcript reads the same whichever way the words arrived.
+
+    Detached like playback: the render takes a second or two and must not sit
+    in front of the prompt, and the hook is killed at its timeout.
+    """
+    text = " ".join(str(payload.get("prompt") or "").split())
+    session = payload.get("session_id") or ""
+    if not text or not session:
+        return 0
+    # A slash command is an instruction to the harness, not something said.
+    if text.startswith("/"):
+        return 0
+    if len(text) > PROMPT_RECORD_LIMIT:
+        log.info("hook: prompt of %d chars not recorded (paste)", len(text))
+        return 0
+
+    def record() -> None:
+        try:
+            from agent_media_core import book_tracks
+
+            book_tracks.record_listener_turn(session, text)
+        except Exception as e:  # noqa: BLE001 — the prompt reached Claude either way
+            log.warning("hook: could not record the prompt (%s)", e)
+
+    if os.environ.get("MEDIA_HOOK_NO_DETACH"):
+        record()
+        return 0
+    try:
+        pid = os.fork()
+    except OSError:
+        record()
+        return 0
+    if pid > 0:
+        return 0
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    try:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+    except OSError:
+        pass
+    try:
+        record()
+    finally:
+        os._exit(0)
+
+
 def main() -> int:
     if os.environ.get("MEDIA_HOOK_ENABLED", "1") == "0":
         return 0
@@ -1007,6 +1076,8 @@ def main() -> int:
             return _handle_notification(payload)
         if event_name == "Stop":
             return _handle_stop(payload)
+        if event_name == "UserPromptSubmit":
+            return _handle_user_prompt(payload)
     except Exception as e:  # noqa: BLE001
         log.warning("hook: %s handler failed: %s", event_name, e)
         try:
