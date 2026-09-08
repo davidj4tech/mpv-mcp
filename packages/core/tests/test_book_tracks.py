@@ -228,3 +228,45 @@ def test_conversation_log_includes_the_live_tail(tmp_path, monkeypatch):
         ("you", "a question", None),        # live tail: "You: " stripped
         ("agent", "The fresh reply", None), # live tail: the reply, shown at once
     ]
+
+
+def test_conversation_log_shows_the_turn_being_spoken_now(tmp_path, monkeypatch):
+    """The in-flight turn (in now_playing, not yet in history or the manifest)
+    shows at once, so a reply appears while it is being spoken."""
+    from agent_media_core import book_tracks as bt, session_feed
+    from agent_media_core.state.store import StateStore
+    folder = tmp_path / "p-agent-media" / "A talk"
+    monkeypatch.setattr(bt, "_read_manifest",
+                        lambda s: {"turns": [{"at": 100.0, "title": "Earlier"}]})
+    monkeypatch.setattr(bt, "_abs_ready", lambda target=None: None)
+    monkeypatch.setattr(session_feed, "turns", lambda s, store=None: [
+        session_feed.Turn(at=100.0, text="Earlier", workspace="p-agent-media",
+                          clips=[], durations=[], sentences=[], listener=False)])
+    # now_playing: this session's reply is mid-flight, writer alive (our pid).
+    import os
+    monkeypatch.setattr(StateStore, "get_now_playing", lambda self, sink: {
+        "started_at": 300.0,
+        "extras": {"source_session": "sess-1", "text": "Speaking this now",
+                   "writer_pid": os.getpid(), "listener": False}})
+    lines = bt.conversation_log("sess-1", folder)
+    assert lines[-1] == {"start": None, "end": None,
+                         "who": "agent", "text": "Speaking this now"}
+
+
+def test_conversation_log_ignores_a_live_turn_from_another_session(tmp_path, monkeypatch):
+    from agent_media_core import book_tracks as bt, session_feed
+    from agent_media_core.state.store import StateStore
+    import os
+    folder = tmp_path / "p-agent-media" / "A talk"
+    monkeypatch.setattr(bt, "_read_manifest",
+                        lambda s: {"turns": [{"at": 100.0, "title": "Earlier"}]})
+    monkeypatch.setattr(bt, "_abs_ready", lambda target=None: None)
+    monkeypatch.setattr(session_feed, "turns", lambda s, store=None: [
+        session_feed.Turn(at=100.0, text="Earlier", workspace="p-agent-media",
+                          clips=[], durations=[], sentences=[], listener=False)])
+    monkeypatch.setattr(StateStore, "get_now_playing", lambda self, sink: {
+        "started_at": 300.0,
+        "extras": {"source_session": "OTHER", "text": "not this conversation",
+                   "writer_pid": os.getpid()}})
+    lines = bt.conversation_log("sess-1", folder)
+    assert [l["text"] for l in lines] == ["Earlier"]

@@ -579,6 +579,48 @@ def publish_chapters(session: str, folder: Path, *, target=None) -> int:
         return 0
 
 
+def _live_turn(session: str) -> Optional[dict]:
+    """The turn being spoken *right now* for `session`, as
+    `{at, text, listener}`, or None.
+
+    History is only written when a turn ends, so for the whole time a reply is
+    audible its words are missing from speech history — which is why the
+    transcript could not show a turn until after it finished speaking. This
+    reads the same now_playing row the speech controls use, with the same
+    writer-pid liveness guard, so a submit that crashed without clearing the
+    row does not leave a phantom line. Keyed by `started_at`, which is the same
+    `at` the ended history row and the manifest turn will carry, so the line
+    merges into one row as the turn progresses rather than doubling.
+    """
+    import os as _os
+    from .state.store import StateStore
+
+    np = StateStore().get_now_playing("speech")
+    if not np:
+        return None
+    ex = np.get("extras")
+    if isinstance(ex, str):
+        try:
+            ex = json.loads(ex)
+        except ValueError:
+            ex = {}
+    if not isinstance(ex, dict):
+        return None
+    if ex.get("source_session") != session or ex.get("kind") == "notif":
+        return None
+    wp = ex.get("writer_pid")
+    if wp:
+        try:
+            _os.kill(int(wp), 0)
+        except (OSError, ValueError):
+            return None
+    at, text = np.get("started_at"), (ex.get("text") or "")
+    if at is None or not text.strip():
+        return None
+    return {"at": round(float(at), 3), "text": text,
+            "listener": bool(ex.get("listener"))}
+
+
 def conversation_log(session: str, folder: Path, *, target=None) -> list:
     """The conversation as lines you can read. `[{start, end, who, text}]`.
 
@@ -603,7 +645,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     for t in session_feed.turns(session):
         said[round(float(t.at), 3)] = t
 
-    if not turns and not said:
+    live = _live_turn(session)
+    if not turns and not said and not live:
         return []
 
     positions = []
@@ -650,7 +693,15 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     # their offsets. This is what lets a reply appear in the transcript within
     # a poll of being spoken instead of waiting out the publish cycle.
     for at in sorted(a for a in said if a not in seen):
+        seen.add(at)
         out.append(_line(said[at].listener, said[at].text, {}))
+
+    # The turn speaking right now, if it has not already landed as an ended
+    # row above. This is what puts a reply on screen *while* it is being
+    # spoken, not after — keyed by the same `at` it will keep, so it becomes
+    # the ended row in place rather than a duplicate.
+    if live and live["at"] not in seen:
+        out.append(_line(live["listener"], live["text"], {}))
     return out
 
 
