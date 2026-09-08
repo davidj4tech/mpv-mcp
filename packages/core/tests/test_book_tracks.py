@@ -247,10 +247,15 @@ def test_conversation_log_shows_the_turn_being_spoken_now(tmp_path, monkeypatch)
     monkeypatch.setattr(StateStore, "get_now_playing", lambda self, sink: {
         "started_at": 300.0,
         "extras": {"source_session": "sess-1", "text": "Speaking this now",
-                   "writer_pid": os.getpid(), "listener": False}})
+                   "writer_pid": os.getpid(), "listener": False,
+                   "clip_sentences": ["Speaking this now.", "And this next."],
+                   "current_sentence_idx": 1}})
     lines = bt.conversation_log("sess-1", folder)
     assert lines[-1] == {"start": None, "end": None, "at": 300.0, "key": "",
-                         "who": "agent", "text": "Speaking this now"}
+                         "who": "agent", "text": "Speaking this now",
+                         # Live, and which sentence the voice is on.
+                         "live": True, "sentence": 1,
+                         "sentences": ["Speaking this now.", "And this next."]}
 
 
 def test_conversation_log_ignores_a_live_turn_from_another_session(tmp_path, monkeypatch):

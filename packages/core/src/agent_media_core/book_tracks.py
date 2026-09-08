@@ -681,8 +681,17 @@ def _live_turn(session: str) -> Optional[dict]:
     at, text = np.get("started_at"), (ex.get("text") or "")
     if at is None or not text.strip():
         return None
+    # The sentence being spoken, for a transcript that wants to show it: the
+    # same `clip_sentences` + `current_sentence_idx` the terminal highlight and
+    # the follow pane read, kept up to date by the sentence loop as it plays.
+    try:
+        sentence = int(ex.get("current_sentence_idx"))
+    except (TypeError, ValueError):
+        sentence = None
     return {"at": round(float(at), 3), "text": text,
-            "listener": bool(ex.get("listener"))}
+            "listener": bool(ex.get("listener")),
+            "sentences": [str(x) for x in (ex.get("clip_sentences") or [])],
+            "sentence": sentence}
 
 
 def conversation_log(session: str, folder: Path, *, target=None) -> list:
@@ -768,7 +777,12 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     # spoken, not after — keyed by the same `at` it will keep, so it becomes
     # the ended row in place rather than a duplicate.
     if live and live["at"] not in seen:
-        out.append(_line(live["listener"], live["text"], {}, live["at"]))
+        line = _line(live["listener"], live["text"], {}, live["at"])
+        # Marked live, with the sentence being spoken, so the transcript can
+        # follow the voice sentence by sentence rather than just show the turn.
+        line.update({"live": True, "sentences": live["sentences"],
+                     "sentence": live["sentence"]})
+        out.append(line)
     return out
 
 
