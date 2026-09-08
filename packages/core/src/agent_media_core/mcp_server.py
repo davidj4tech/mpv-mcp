@@ -50,7 +50,7 @@ from .route import (
     detect_content_type,
     resolve,
 )
-from . import library
+from . import library, phone_player
 from .sinks import SinkBook, SinkMusic, SinkSpeech
 from .sinks.book import normalize_uri
 from .sinks.music_router import SinkMusicRouter
@@ -664,6 +664,28 @@ def book_play(uri: str, resume: bool = True, start_ms: int = -1,
                                else "not cached and audiobook-fetch unavailable")}
     if t.name not in ("", "local") and not norm.startswith(("http://", "https://", "rtsp://")):
         p = Path(norm).expanduser()
+        # The phone's own player first (Sasonica's ExoPlayer, see phone_player):
+        # if the file is an item in the app's Audiobookshelf and the app takes
+        # it, nothing is staged and mpv is never touched. None = fall through.
+        if p.is_file():
+            if start_ms is not None and start_ms >= 0:
+                start = start_ms
+            elif resume:
+                start = st.get_resume_pos(norm) or 0
+            else:
+                start = 0
+            taken = phone_player.play(p, t, start_ms=start)
+            if taken:
+                _save_book_bookmark(b, st, t)
+                display_title = title.strip() or taken.get("title") or p.stem
+                st.set_now_playing(sink="book", uri=norm, started_at=time.time(),
+                                   content_type="audiobook", target=t.name,
+                                   extras={"title": display_title, "player": "sasonica",
+                                           "item_id": taken.get("item_id")})
+                st.set_book_last(norm, display_title)
+                st.clear_playlist_active()
+                return {"ok": True, "uri": norm, "resumed_from_ms": start, "target": t.name,
+                        "player": "sasonica", "state": taken}
         if p.is_file():
             try:
                 from .sinks.book import remote_cached_path, start_stage_local_for_remote
@@ -711,6 +733,8 @@ def book_resume(target: str = "") -> dict:
     """Resume the book channel. If nothing is loaded, reopen the last book
     played, at its saved bookmark."""
     b, st, t = _book(), _state(), _book_target(target)
+    if phone_player.has_item(t):
+        return {"ok": phone_player.request(t, "/resume", timeout=8.0) is not None, "player": "sasonica"}
     if b.idle(t):
         last = st.get_book_last()
         if not last:
@@ -728,6 +752,8 @@ def book_resume(target: str = "") -> dict:
 def book_pause(target: str = "") -> dict:
     """Pause the book channel and save its place."""
     b, t = _book(), _book_target(target)
+    if phone_player.has_item(t):
+        return {"ok": phone_player.request(t, "/pause", timeout=8.0) is not None, "player": "sasonica"}
     _save_book_bookmark(b, _state(), t)
     b.pause(t)
     return {"ok": True}
@@ -737,6 +763,11 @@ def book_pause(target: str = "") -> dict:
 def book_stop(target: str = "") -> dict:
     """Stop the book channel, saving its place first so you can resume later."""
     b, st, t = _book(), _state(), _book_target(target)
+    if phone_player.has_item(t):
+        ok = phone_player.request(t, "/stop", timeout=8.0) is not None
+        st.clear_now_playing("book")
+        st.clear_playlist_active()
+        return {"ok": ok, "player": "sasonica"}
     _save_book_bookmark(b, st, t)
     b.stop(t)
     st.clear_now_playing("book")
@@ -747,7 +778,11 @@ def book_stop(target: str = "") -> dict:
 @mcp.tool()
 def book_skip(seconds: float = 30, target: str = "") -> dict:
     """Skip the book by ±seconds (negative = back). Default +30s."""
-    _book().skip(seconds, _book_target(target))
+    t = _book_target(target)
+    if phone_player.has_item(t):
+        return {"ok": phone_player.request(t, "/jump", {"by": seconds}, timeout=8.0) is not None,
+                "seconds": seconds, "player": "sasonica"}
+    _book().skip(seconds, t)
     return {"ok": True, "seconds": seconds}
 
 
@@ -758,14 +793,23 @@ def book_seek(position_secs: float, target: str = "") -> dict:
     Unlike `book_skip` (which moves ±relative), this jumps to a specific
     time — e.g. `position_secs=5615` for 1:33:35. Clamped to the file length.
     """
-    pos = _book().seek_to(position_secs, _book_target(target))
+    t = _book_target(target)
+    if phone_player.has_item(t):
+        s = phone_player.request(t, "/seek", {"t": position_secs}, timeout=8.0)
+        return {"ok": s is not None, "position_ms": int((s or {}).get("t", position_secs) * 1000),
+                "player": "sasonica"}
+    pos = _book().seek_to(position_secs, t)
     return {"ok": True, "position_ms": pos}
 
 
 @mcp.tool()
 def book_speed(rate: float, target: str = "") -> dict:
     """Set book playback speed (0.25–4.0; 1.0 = normal)."""
-    applied = _book().set_speed(rate, _book_target(target))
+    t = _book_target(target)
+    if phone_player.has_item(t):
+        s = phone_player.request(t, "/speed", {"rate": rate}, timeout=8.0)
+        return {"ok": s is not None, "speed": (s or {}).get("rate", rate), "player": "sasonica"}
+    applied = _book().set_speed(rate, t)
     return {"ok": True, "speed": applied}
 
 

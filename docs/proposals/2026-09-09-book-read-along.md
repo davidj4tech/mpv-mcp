@@ -273,6 +273,36 @@ comfortably and should run elsewhere or overnight.
   Also set that day: `dumpsys deviceidle whitelist +com.sasonica.app`
   (battery "unrestricted"); it does not stop the freezer but keeps the app
   from being killed. Revert with `whitelist -com.sasonica.app`.
-- **Next:** `media book play` tries the phone first when the file is an ABS
-  item and falls back to mpv; the canvas `book` source reads `/state`
-  (or the app pushes it) before the ABS-progress interpolation.
+- **`media book play` tries the phone first** (`phone_player.py`, same
+  day). For a non-local target it looks the file up on the app's own
+  Audiobookshelf (13379; `MEDIA_PHONE_PLAYER_ABS=url|token`, else the first
+  `ABS_SERVERS` entry), and if the app takes `/play` nothing is staged and
+  mpv is never touched; pause, resume, stop, skip, seek and speed go to the
+  app while it holds a session. `None` anywhere = mpv as before.
+  `MEDIA_PHONE_PLAYER=0` switches it off. Verified from red5 at 08:40: play
+  landed at 1:41 in the app, `media book pause` paused it there.
+  Two transports: ssh to Termux today (thaw broadcast + loopback curl);
+  `MEDIA_PHONE_PLAYER_URL` (+`_TOKEN`) for a direct tailnet route once the
+  app has an always-on remote mode — see "Termux or not" below.
+  Note the 13379 instance holds only the Conversations library, so a real
+  audiobook still falls back to mpv until the app's server has books.
+- **Next:** the canvas `book` source reads `/state` (or the app pushes it)
+  before the ABS-progress interpolation.
+
+## Termux or not
+
+Today the route needs Termux on the phone: sshd for the hop, `am` for the
+thaw, `curl` for loopback. Doing it with Sasonica alone needs two things in
+the app, both reasonable and neither built yet:
+
+1. **Listen off-loopback with a token** (`MEDIA_SHARE_TOKEN`-style, enforced
+   both ends), so red5 talks to `p8a:8772` over the tailnet directly.
+2. **Stay awake without a caller.** Android freezes a background app and
+   nothing arriving on a socket thaws it. The only self-contained answers are
+   an always-on foreground service (a persistent "remote ready"
+   notification, as the companion app does — a setting, off by default) or
+   a push service (FCM). The foreground service is the one that fits.
+
+With those, `MEDIA_PHONE_PLAYER_URL=http://p8a:8772` replaces the ssh
+transport and nothing else changes. The cold case (app killed) still needs
+something to launch it; that is the mpv fallback by design.
