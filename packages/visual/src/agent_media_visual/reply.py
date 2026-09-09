@@ -945,9 +945,14 @@ def sessions_index() -> list[dict]:
 
 _NEW = re.compile(r"^\s*(?:(?:start|open)\s+a\s+)?(?:new|fresh)\s+(?:chat|conversation|session|thread)\b[\s,.:;!-]*(.*)$",
                   re.I | re.S)
-_TO = re.compile(r"^\s*(?:reply\s+(?:to|in)|continue|switch\s+to|back\s+to|go\s+to|in|to|tell)\s+"
-                 r"(?:the\s+)?(.+?)(?:\s+(?:chat|conversation|session|thread))?\s*[,:;.-]\s+(.+)$",
-                 re.I | re.S)
+# Dictation carries no punctuation, so the name is not delimited: it is
+# however many words after the verb best fit a title, and the message is
+# whatever follows them.
+_VERB = re.compile(r"^\s*(?:please\s+)?(?:reply\s+(?:to|in)|continue(?:\s+(?:with|in))?|switch\s+to|back\s+to|go\s+to|open|in|to|tell)\s+(?:the\s+)?(.+)$",
+                   re.I | re.S)
+_FILLER = {"chat", "conversation", "session", "thread", "the", "one", "please"}
+_TRAILING = {"chat", "conversation", "session", "thread", "one"}   # after the name, still the name
+_NAME_WORDS = 8
 
 
 def _score(name: str, title: str) -> float:
@@ -956,9 +961,10 @@ def _score(name: str, title: str) -> float:
         return 0.0
     if a == b:
         return 1.0
-    if a in b:
+    # Whole words only, and not a scrap: "me" is inside "message".
+    if len(a) >= 4 and re.search(r"(?<![a-z0-9])" + re.escape(a) + r"(?![a-z0-9])", b):
         return 0.9
-    words = [w for w in re.findall(r"[a-z0-9]+", a) if len(w) > 2]
+    words = [w for w in re.findall(r"[a-z0-9]+", a) if len(w) > 2 and w not in _FILLER]
     if words and all(w in b for w in words):
         return 0.85
     return difflib.SequenceMatcher(None, a, b).ratio()
@@ -967,27 +973,47 @@ def _score(name: str, title: str) -> float:
 def resolve_target(text: str, index: list[dict]) -> tuple[str, dict | list | None, str]:
     """What the spoken words say about where they go. `(kind, hit, rest)`.
 
-    `kind` is "new" ("new chat, …" — the rest goes to a fresh session),
-    "session" (`hit` is the index row named, the rest is the message),
-    "ambiguous" (`hit` is the rows it could be, and nothing should be sent),
-    or "" (no target spoken; `rest` is the whole text).
+    `kind` is "new" ("new chat …" — the rest goes to a fresh session),
+    "session" (`hit` is the index row named; `rest` is the message, and an
+    empty one means "just take me there"), "ambiguous" (`hit` is the rows it
+    could be, and nothing should be sent), or "" (no target spoken; `rest` is
+    the whole text).
     """
     m = _NEW.match(text or "")
     if m:
         return "new", None, m.group(1).strip()
-    m = _TO.match(text or "")
+    m = _VERB.match(text or "")
     if not m:
         return "", None, (text or "").strip()
-    name, rest = m.group(1).strip(), m.group(2).strip()
-    scored = sorted(((_score(name, row["title"]), row) for row in index),
-                    key=lambda r: -r[0])
-    if not scored or scored[0][0] < 0.6:
+    words = m.group(1).split()
+    best: tuple[float, int, dict | None] = (0.0, 0, None)
+    close: list[dict] = []
+    for n in range(1, min(_NAME_WORDS, len(words)) + 1):
+        name = " ".join(words[:n]).rstrip(",.:;!-")
+        scored = sorted(((_score(name, row["title"]), row) for row in index), key=lambda r: -r[0])
+        if not scored:
+            continue
+        top = scored[0][0]
+        # Words found in the title (0.85 and up) are a match at any length; a
+        # mere resemblance only counts once the name is long enough for
+        # resemblance to mean something — "me" resembles half the shelf.
+        floor = 0.85 if len(name) < 10 else 0.72
+        if top < floor:
+            continue
+        # A longer name that fits as well is the better reading: "reply to
+        # digital assistant" over "reply to digital".
+        if top > best[0] or (top >= best[0] - 0.01 and n > best[1]):
+            best = (top, n, scored[0][1])
+            close = [row for sc, row in scored if sc >= floor and top - sc < 0.08]
+    if best[2] is None:
         return "", None, (text or "").strip()
-    best = scored[0][0]
-    close = [row for sc, row in scored if sc >= 0.6 and best - sc < 0.08]
-    if len(close) > 1 and best < 1.0:
+    n = best[1]
+    while n < len(words) and words[n].lower().strip(",.:;!-") in _TRAILING:
+        n += 1            # "… the videography chat, add a gimbal": the chat is the name's
+    rest = " ".join(words[n:]).lstrip(",.:;- ").strip()
+    if len(close) > 1 and best[0] < 1.0:
         return "ambiguous", close, rest
-    return "session", scored[0][1], rest
+    return "session", best[2], rest
 
 
 def _title_of(session: str, index: list[dict] | None = None) -> str:
@@ -1031,6 +1057,12 @@ def ask_routed(text: str, bearer: str, *, target: str = "", player_item: str = "
             text, how = rest or text, "spoken"
         elif kind == "session":
             session, text, how = hit["session"], rest, "spoken"
+            if not text:
+                # A name and nothing else: switch to it, send nothing.
+                item, ready = item_for_session(session, bearer)
+                return True, {"mode": "switched", "how": how, "session": session,
+                              "title": hit["title"], "pane": hit.get("pane"),
+                              "item": item if ready else None, "text": ""}
         elif kind == "ambiguous":
             return False, {"error": "which conversation?", "status": 300,
                            "ambiguous": hit, "text": rest}

@@ -860,6 +860,19 @@ def test_resolve_target_names_a_session_and_strips_the_prefix():
     assert kind == "session" and hit["session"].startswith("bbbbbbbb") and rest == "add a gimbal"
 
 
+def test_resolve_target_needs_no_punctuation_as_dictation_has_none():
+    kind, hit, rest = reply.resolve_target("reply to digital assistant does the earbud work", _IDX)
+    assert kind == "session" and hit["session"].startswith("aaaaaaaa") and rest == "does the earbud work"
+    kind, hit, rest = reply.resolve_target("continue with the videography system chat add a gimbal", _IDX)
+    assert kind == "session" and hit["session"].startswith("bbbbbbbb") and rest == "add a gimbal"
+
+
+def test_resolve_target_a_bare_name_is_a_switch():
+    kind, hit, rest = reply.resolve_target("reply to digital assistant", _IDX)
+    assert kind == "session" and hit["session"].startswith("aaaaaaaa") and rest == ""
+    assert reply.resolve_target("open the drone battery one", _IDX)[0] == "session"
+
+
 def test_resolve_target_is_not_fooled_by_ordinary_sentences():
     assert reply.resolve_target("what is the weather in Melbourne today", _IDX) == ("", None, "what is the weather in Melbourne today")
     assert reply.resolve_target("tell me a joke", _IDX)[0] == ""
@@ -935,3 +948,9 @@ def test_routed_ask_sends_nothing_when_the_name_is_ambiguous(_router):
 def test_routed_ask_target_new_forces_a_fresh_session(_router):
     ok, d = reply.ask_routed("reply to digital assistant, hi", "tok", target="new", sticky="cccccccc-1111-2222-3333-444444444444")
     assert d["mode"] == "new" and d["how"] == "asked" and _router == {"fresh": "reply to digital assistant, hi"}
+
+
+def test_routed_ask_a_bare_name_switches_and_sends_nothing(_router):
+    ok, d = reply.ask_routed("reply to digital assistant", "tok")
+    assert ok and d["mode"] == "switched" and d["title"] == "Sasonica default digital assistant" and d["item"] == "li_9"
+    assert _router == {}
