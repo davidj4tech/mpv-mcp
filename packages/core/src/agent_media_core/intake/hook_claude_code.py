@@ -63,7 +63,7 @@ from .._paths import state_dir
 from ..state import StateStore
 from ..types import Event, Priority, Source
 from ._env import load_env_file
-from ._text import strip_markdown
+from ._text import strip_markdown, strip_system_blocks
 from .submit import submit_event
 
 
@@ -1014,35 +1014,6 @@ def _handle_stop(payload: dict) -> int:
 # voice reading code onto the shelf. Skipped rather than truncated: a cut-off
 # transcript line reads as a bug, a missing one reads as a paste.
 PROMPT_RECORD_LIMIT = 2000
-
-#: Blocks the harness writes into a user prompt that the listener never said:
-#: a finished background task, a system reminder, the echo of a slash command.
-#: They arrived in the transcript as listener turns and were read aloud — one
-#: task notification rendered 230KB of somebody spelling out a tool-use id.
-_SYSTEM_BLOCKS = re.compile(
-    r"<(task-notification|system-reminder|local-command-caveat|local-command-stdout"
-    r"|command-name|command-message|command-args)\b.*?</\1>",
-    re.DOTALL | re.IGNORECASE)
-_SYSTEM_BANNER = re.compile(
-    r"\[SYSTEM NOTIFICATION - NOT USER INPUT\].*?(?=\n\s*\n|\Z)",
-    re.DOTALL | re.IGNORECASE)
-
-
-def strip_system_blocks(text: str) -> str:
-    """The listener's own words, with the harness's asides removed.
-
-    Stripped rather than skipped: a real message often arrives with a system
-    block stapled to it (a slash command's output, then what the person
-    actually typed), and dropping the whole prompt would lose the sentence
-    that matters. Nothing left over means nothing was said.
-    """
-    out = _SYSTEM_BANNER.sub(" ", _SYSTEM_BLOCKS.sub(" ", text or ""))
-    # An unterminated block (the harness truncates long ones) leaves a bare
-    # opening tag and everything after it; there is no listener text in that.
-    out = re.split(r"<(?:task-notification|system-reminder|local-command-caveat)\b",
-                   out, maxsplit=1)[0]
-    return " ".join(out.split())
-
 
 def answers_from_response(response) -> str:
     """What the listener chose, as a sentence, or "".

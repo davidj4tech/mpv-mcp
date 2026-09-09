@@ -784,6 +784,20 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
                 line["text"] = asked
         return line
 
+    def _said_by_anyone(line) -> bool:
+        """Was this line said by a person or the assistant at all?
+
+        The hook used to record the harness's own asides — a finished
+        background task, a system reminder — as listener turns, and they are
+        still in the history of every conversation from before it stopped.
+        They are filtered here as well as at the source so the transcripts
+        that already have them read properly rather than staying broken.
+        """
+        if line.get("who") != "you":
+            return True
+        from .intake._text import strip_system_blocks
+        return bool(strip_system_blocks(line.get("text") or ""))
+
     out = []
     seen = set()
     for n, turn in enumerate(turns):
@@ -818,7 +832,7 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
                      "sentence": live["sentence"], "offsets": live["offsets"],
                      "elapsed": live["elapsed"], "paused": live["paused"]})
         out.append(line)
-    return out
+    return [line for line in out if _said_by_anyone(line)]
 
 
 #: Who a conversation is by. The workspace used to end up here, because it is
