@@ -24,7 +24,9 @@ assistant app*; `AbsSasonica` turns the intent into an `assist` event
 (retained until the web layer listens, for cold starts); `pages/ask.vue`
 starts dictation at once, POSTs `/ask`, polls `/conversation?session=` and
 moves to the item's chat page when it exists. "New chat" in the side drawer
-opens the same page.
+opens the same page. From the button the words are sent as soon as they are
+heard; and pressed with a conversation's page open, the button replies into
+that thread instead (Sasonica 60e9ff4c, confirmed on p8a 2026-09-09).
 
 Selecting it once installed: the Settings picker, or over adb shell
 `cmd role add-role-holder android.app.role.ASSISTANT com.sasonica.app`
