@@ -54,6 +54,14 @@ Selecting it once installed: the Settings picker, or over adb shell
   `_ensure_submitted` looks at the box afterwards and presses Enter once if
   the words are still there.
 
+- **The item id has to come from the phone's own server, and after the
+  scan.** This host publishes to two ABS instances and each gives the folder
+  a different id; and the app's item page cannot open an item ABS has only
+  just created. The first live press bounced home with "Failed to get library
+  item from server". `/conversation?session=` now looks the folder up with the
+  caller's bearer on the caller's server and answers `item` only once
+  `numTracks > 0` (`scanning: true` in between).
+
 ## What is left
 
 - The ask page opens the item's *chat* page only once the item exists; until

@@ -804,27 +804,35 @@ def _folder_for_session(session: str) -> str:
     return ""
 
 
-def item_for_session(session: str) -> str | None:
-    """The ABS library item id behind `session`, or None until it has one.
+def item_for_session(session: str, bearer: str) -> tuple[str | None, bool]:
+    """`(item id, ready)` for `session` on the caller's own Audiobookshelf.
 
-    None means "not yet" as often as "never": the item exists once a turn has
-    been exported (a minute's debounce) and ABS has scanned the folder.
+    The caller's server and the caller's bearer, on purpose: this host
+    publishes to more than one ABS and each gives the same folder a different
+    id, so an id from "our" server is a 404 on the phone signed in to the
+    other. `ready` is whether ABS has built the item's tracks yet — the app's
+    item page cannot open one it has only just created (the first attempt
+    sent the phone to a trackless item and it bounced home with "Failed to
+    get library item"), so the caller should wait for both.
     """
     folder = _folder_for_session(session)
     if not folder:
-        return None
-    try:
-        from agent_media_core import book_tracks
-
-        ready = book_tracks._abs_ready()
-        if not ready:
-            return None
-        url, token, libs = ready
-        item = book_tracks._find_item(url, token, libs, Path(folder))
-    except Exception as e:  # noqa: BLE001 — "not yet" is the honest answer
-        log.warning("reply: item lookup for %s failed (%s)", session[:8], e)
-        return None
-    return str(item.get("id")) if item and item.get("id") else None
+        return None, False
+    url = abs_home(bearer)
+    if not url:
+        return None, False
+    tail = _tail(folder)
+    libs, _status = _abs_get(url, bearer, "/api/libraries")
+    for lib in (libs or {}).get("libraries") or []:
+        if lib.get("mediaType") != "book":
+            continue
+        page, _status = _abs_get(
+            url, bearer, f"/api/libraries/{lib.get('id')}/items?limit=1000&sort=addedAt&desc=1")
+        for item in (page or {}).get("results") or []:
+            if _tail(item.get("path") or "") == tail and item.get("id"):
+                tracks = int(((item.get("media") or {}).get("numTracks")) or 0)
+                return str(item["id"]), tracks > 0
+    return None, False
 
 
 def conversation_for_session(session: str, bearer: str) -> tuple[bool, dict]:
@@ -843,7 +851,9 @@ def conversation_for_session(session: str, bearer: str) -> tuple[bool, dict]:
     if not ok:
         return False, {"error": why, "status": 403}
     pane = live_sessions().get(session, "")
-    return True, {"session": session, "item": item_for_session(session),
+    item, ready = item_for_session(session, bearer)
+    return True, {"session": session, "item": item if ready else None,
+                  "scanning": bool(item) and not ready,
                   "live": bool(pane), "pane": pane or None,
                   "resumable": session_exists(session)}
 

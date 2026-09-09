@@ -721,22 +721,38 @@ def test_ask_reports_a_window_that_never_came_up(monkeypatch, _asker):
     assert ok is False and "did not come up" in detail["error"]
 
 
-def test_conversation_for_session_says_not_yet_until_the_item_exists(tmp_path, monkeypatch):
+def test_conversation_for_session_waits_for_the_item_and_its_tracks(tmp_path, monkeypatch):
     sid = "11111111-2222-3333-4444-555555555555"
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
     monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
     monkeypatch.setattr(reply, "live_sessions", lambda: {sid: "%9"})
     monkeypatch.setattr(reply, "session_exists", lambda s: True)
+    monkeypatch.setattr(reply, "abs_home", lambda b: "http://phone-abs")
     _manifests(tmp_path, monkeypatch, [])
     ok, detail = reply.conversation_for_session(sid, "tok")
-    assert ok is True and detail["item"] is None and detail["live"] is True
+    assert ok is True and detail["item"] is None and detail["scanning"] is False and detail["live"] is True
+
     (tmp_path / "book-tracks" / f"{sid}.json").write_text(json.dumps(
         {"session": sid, "folder": "/home/ryer/conversations/scratch/scratch - Time"}))
-    from agent_media_core import book_tracks
-    monkeypatch.setattr(book_tracks, "_abs_ready", lambda target=None: ("http://abs", "svc", [{"id": "lib"}]))
-    monkeypatch.setattr(book_tracks, "_find_item", lambda url, tok, libs, folder: {"id": "li_42", "path": str(folder)})
+    rows = {"results": [{"id": "li_42", "path": "/conversations/scratch/scratch - Time",
+                         "media": {"numTracks": 0}}]}
+    asked = []
+
+    def abs_get(url, bearer, path, **k):
+        asked.append((url, bearer, path))
+        if path == "/api/libraries":
+            return {"libraries": [{"id": "pod", "mediaType": "podcast"}, {"id": "conv", "mediaType": "book"}]}, 200
+        return rows, 200
+
+    monkeypatch.setattr(reply, "_abs_get", abs_get)
     ok, detail = reply.conversation_for_session(sid, "tok")
-    assert ok is True and detail["item"] == "li_42"
+    assert detail["item"] is None and detail["scanning"] is True     # created, no tracks yet
+    assert all(u == "http://phone-abs" and b == "tok" for u, b, _ in asked)   # the caller's server
+    assert not any("/pod/" in p for _, _, p in asked)                # book libraries only
+
+    rows["results"][0]["media"]["numTracks"] = 5
+    ok, detail = reply.conversation_for_session(sid, "tok")
+    assert detail["item"] == "li_42" and detail["scanning"] is False
 
 
 def test_conversation_for_session_rejects_a_non_uuid():
