@@ -84,9 +84,35 @@ standalone proxies `/status` back to itself and wedges (the README's dev loop
 wants a source checkout of the ABS server beside it). So the next session
 should either open it as David and look, or stand up the paired dev loop.
 
+## Item 4 — new chat (same session, after David looked at it)
+
+`/library/<id>/ask`, and a "New chat" entry in the side rail. Under the
+library route because a conversation that gets going becomes an item in that
+library and the page then navigates to it — which needs the library id.
+
+The routing is the whole of it. Anything the server would be GUESSING is
+asked first as a dry run (`dry: true` sends nothing): a fresh session commits
+straight through, a guessed thread gets four seconds and a sentence naming
+it, and a spoken name matching more than one conversation comes back 300 with
+candidates, which become the picker with nothing sent. All three verified
+against the running canvas — `how: default` → new, `how: sticky` → continued
+with a title, and "reply to sasonica" → 300 with four candidates.
+
+The last thread spoken to is per device (`sasonica.askLast` in
+`localStorage`, `lib/sasonica/askLast.ts`) — it is about this screen's train
+of thought, not the account.
+
+Also in: `useDictation`, shared by the reply box and this page. And the
+conversation page's height — it was measuring the viewport while the region
+it gets is `.page-wrapper`, so it ran a media-player's height too tall
+whenever something was streaming, which is a small scroll to reach the box
+you want to type in. It mirrors both of app.css's rules now; `h-full` cannot
+do it, the wrapper between it and the scroll container has no height of its
+own.
+
 ## Next
 
-Item 4 (new chat / ask), then 5 (live shelf and session controls), then 6
+Item 5 (live shelf and session controls), then 6
 (settings: the canvas address — `sasonica.canvasUrl` in `localStorage`, read
 by `canvasBaseUrl()`, nothing writes it yet — and the timing-readout toggle).
 
