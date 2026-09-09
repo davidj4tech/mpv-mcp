@@ -1720,7 +1720,11 @@ class Handler(BaseHTTPRequestHandler):
                 mode=str(body.get("mode") or "continue"))
             status = detail.pop("status", 400)
             if not ok:
+                # The item id too: a refusal that names only the reason
+                # cannot be told apart from the next one, and "no such item"
+                # is a question about WHICH item was asked for.
                 print(f"reply: refused {status} ({detail.get('error')}) "
+                      f"for item {str(body.get('item') or '')!r} "
                       f"from {self.client_address[0]}", file=sys.stderr)
             self._json(200 if ok else status, {"ok": ok, **detail})
         elif path == "/ask":

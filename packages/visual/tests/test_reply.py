@@ -124,6 +124,23 @@ def test_an_item_abs_will_not_show_us_is_refused(monkeypatch):
     assert reply.session_for_item("item1", "tok") == (None, "no such item")
 
 
+def test_an_unreachable_abs_is_not_a_missing_item(monkeypatch):
+    # These were the same message, and they send you to opposite places: one
+    # says the library is wrong, the other says the server blinked. Status 0
+    # is "could not be reached" (see _abs_get).
+    monkeypatch.setattr(reply, "_abs_url", lambda: "http://abs")
+    monkeypatch.setattr(reply, "_abs_get", lambda *a, **k: (None, 0))
+    sid, why = reply.session_for_item("item1", "tok")
+    assert sid is None and "did not answer" in why and "no such item" not in why
+
+
+def test_a_broken_abs_says_what_it_said(monkeypatch):
+    monkeypatch.setattr(reply, "_abs_url", lambda: "http://abs")
+    monkeypatch.setattr(reply, "_abs_get", lambda *a, **k: (None, 500))
+    sid, why = reply.session_for_item("item1", "tok")
+    assert sid is None and "500" in why and "no such item" not in why
+
+
 # --- the message itself --------------------------------------------------------
 
 def test_quote_and_reply_land_on_one_line():

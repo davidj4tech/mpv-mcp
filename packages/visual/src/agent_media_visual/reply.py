@@ -255,9 +255,18 @@ def session_for_item(item_id: str, bearer: str) -> tuple[str | None, str]:
     url = abs_home(bearer)
     if not url:
         return None, "no Audiobookshelf configured on this host"
-    item, _status = _abs_get(url, bearer, f"/api/items/{item_id}")
+    item, status = _abs_get(url, bearer, f"/api/items/{item_id}")
     if not item:
-        return None, "no such item"
+        # The status is the difference between "that item is not there" and
+        # "Audiobookshelf did not answer", which were both reported as the
+        # first one — so an outage sent you looking for a missing item, and a
+        # reply that failed because the server blinked said the library was
+        # wrong. Only a real 404 is a missing item.
+        if status == 404:
+            return None, "no such item"
+        if not status:
+            return None, f"Audiobookshelf ({url}) did not answer"
+        return None, f"Audiobookshelf ({url}) said {status} for that item"
     return session_for_path(item.get("path") or "")
 
 
