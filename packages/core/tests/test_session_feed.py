@@ -383,7 +383,7 @@ def test_a_history_with_no_tmux_name_falls_back_to_the_project(monkeypatch,
     p = d / f"{SESSION}.jsonl"
     p.write_text("")
     monkeypatch.setattr("agent_media_core.conversation.transcript", lambda s: p)
-    assert session_feed.workspace_for(SESSION, []) == "agent-media"
+    assert session_feed.workspace_for(SESSION, []) == "p-agent-media"
 
 
 def test_a_long_question_is_cut_at_a_word(monkeypatch, tmp_path):

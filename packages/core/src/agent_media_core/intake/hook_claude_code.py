@@ -1125,6 +1125,13 @@ def _record_listener_text(session: str, text: str,
     in front of the prompt, and the hook is killed at its timeout.
     """
 
+    # The tmux session and pane, as the spoken turns carry them: a
+    # conversation's first export can happen with only this turn in it, and
+    # the workspace it is filed under is read off the turns.
+    where = {"source_tmux_session": _session_name(),
+             "source_pane": os.environ.get("TMUX_PANE") or ""}
+    extras = {**{k: v for k, v in where.items() if v}, **(extras or {})}
+
     def record() -> None:
         try:
             from agent_media_core import book_tracks

@@ -816,7 +816,7 @@ def ask(text: str, bearer: str, *, quote: str = "") -> tuple[bool, dict]:
         return False, {"error": send_err, "session": session or None, "pane": pane}
     _ensure_submitted(pane, body)
     if session:
-        _record_turn(session, text)
+        _record_turn(session, text, pane)
     return True, {"session": session or None, "pane": pane, "opened": True,
                   "fresh": True, "tmux": host}
 
@@ -1117,14 +1117,23 @@ def compose(text: str, quote: str = "") -> str:
     return f'Re: "{quote}" — {text}'
 
 
-def _record_turn(session: str, text: str) -> None:
+def _record_turn(session: str, text: str, pane: str = "") -> None:
     """Put the listener's own words into the conversation, in the background.
 
     Rendering takes a second or two and the reply has already been delivered,
     so this must not sit in front of the response — the box would look stuck
     for no reason the user could see. Failures are logged and dropped: the
-    words reached the session either way.
+    words reached the session either way. `pane` names where the words went,
+    so the turn carries its tmux session like a spoken one — the workspace a
+    conversation is filed under is read off its turns, and a fresh session's
+    first export may hold only this turn.
     """
+    where = {}
+    if pane:
+        sess = _tmux(["display", "-pt", pane, "#{session_name}"])
+        if sess:
+            where = {"source_tmux_session": sess, "source_pane": pane}
+
     def run() -> None:
         try:
             from agent_media_core import book_tracks, slash
@@ -1138,9 +1147,9 @@ def _record_turn(session: str, text: str) -> None:
                 if cmd is None:
                     return
                 book_tracks.record_listener_turn(session, cmd["text"],
-                                                 extras={"command": cmd})
+                                                 extras={**where, "command": cmd})
                 return
-            book_tracks.record_listener_turn(session, text)
+            book_tracks.record_listener_turn(session, text, extras=where or None)
         except Exception as e:  # noqa: BLE001 — the reply already landed
             print(f"reply: could not shelve the listener's turn ({e})",
                   file=sys.stderr)
@@ -1181,7 +1190,7 @@ def reply(item: str, text: str, bearer: str, *, quote: str = "",
             return False, {"error": err, "pane": pane or None}
         send_err = canvas._send_to_pane(pane, body)
         if not send_err:
-            _record_turn(session, text)
+            _record_turn(session, text, pane)
         return (not send_err), {"session": session, "pane": pane,
                                 "opened": True, "branched": True,
                                 **({"error": send_err} if send_err else {})}
@@ -1214,7 +1223,7 @@ def deliver(session: str, body: str, text: str) -> tuple[bool, dict]:
     send_err = canvas._send_to_pane(pane, body)
     if send_err:
         return False, {"error": send_err, "session": session, "pane": pane}
-    _record_turn(session, text)
+    _record_turn(session, text, pane)
     return True, {"session": session, "pane": pane, "opened": opened}
 
 

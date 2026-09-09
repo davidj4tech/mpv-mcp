@@ -215,7 +215,14 @@ def workspace_for(session: str, ts: list[Turn]) -> str:
     # Only a project earns a label. Without that segment the encoded path is a
     # home directory or a scratch cwd, and "home-ryer · " on the front of every
     # episode is a prefix that distinguishes nothing.
-    return tail.strip() if sep and tail else ""
+    #
+    # `p-` because that is what the tmux session for ~/projects/<name> is
+    # called (tmux-organise-panes abbreviates the container), and this label
+    # has to agree with the one the turns carry: a conversation whose first
+    # export had only the listener's typed prompt — which records no tmux
+    # session — was filed under "agent-media" while every other one from the
+    # same session sat under "p-agent-media", two series for one project.
+    return f"p-{tail.strip()}" if sep and tail.strip() else ""
 
 
 def title_for(session: str, ts: list[Turn]) -> str:

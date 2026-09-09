@@ -181,7 +181,7 @@ def _allowed(monkeypatch):
     # session id the test invented — on a background thread, so it outlives the
     # tmp-dir monkeypatching — and "sess-1" duly appeared in the real library as
     # a conversation called "You: hi". Tests that care about it override this.
-    monkeypatch.setattr(reply, "_record_turn", lambda s, t: None)
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": None)
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
     monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
     monkeypatch.setattr(reply, "session_for_item", lambda *a, **k: ("sess-1", ""))
@@ -324,7 +324,7 @@ def test_a_sent_reply_is_recorded_as_a_turn(monkeypatch, _allowed):
     monkeypatch.setattr(reply, "live_sessions", lambda: {"sess-1": "%7"})
     monkeypatch.setattr(canvas, "_pane_alive", lambda p: True)
     monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: "")
-    monkeypatch.setattr(reply, "_record_turn", lambda s, t: recorded.append((s, t)))
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": recorded.append((s, t)))
     ok, _ = reply.reply("item1", "try the second one", "tok", quote="a turn")
     assert ok is True
     # The words as typed, not the quoted line that went into the pane: the
@@ -338,7 +338,7 @@ def test_nothing_is_recorded_when_the_send_fails(monkeypatch, _allowed):
     monkeypatch.setattr(reply, "live_sessions", lambda: {"sess-1": "%7"})
     monkeypatch.setattr(canvas, "_pane_alive", lambda p: True)
     monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: "pane is gone")
-    monkeypatch.setattr(reply, "_record_turn", lambda s, t: recorded.append(s))
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": recorded.append(s))
     ok, _ = reply.reply("item1", "hi", "tok")
     assert ok is False and recorded == []
 
@@ -666,7 +666,7 @@ def test_hold_client_falls_back_to_an_in_process_holder(monkeypatch):
 
 @pytest.fixture
 def _asker(monkeypatch, tmp_path):
-    monkeypatch.setattr(reply, "_record_turn", lambda s, t: None)
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": None)
     monkeypatch.setattr(reply, "_settle", lambda p, timeout=5.0: None)
     monkeypatch.setattr(reply, "_ensure_submitted", lambda p, t, timeout=3.0: None)
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
@@ -681,7 +681,7 @@ def test_ask_opens_a_fresh_window_and_types_the_first_message(monkeypatch, _aske
                         lambda s, cwd, *, resume, host="", flags=(): opened.append((s, cwd, resume, host, list(flags))) or ("%9", ""))
     monkeypatch.setattr(reply, "session_of_pane", lambda p, timeout=10.0: "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: sent.append((p, t)) or "")
-    monkeypatch.setattr(reply, "_record_turn", lambda s, t: shelved.append((s, t)))
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": shelved.append((s, t)))
     ok, detail = reply.ask("what is the time", "tok", quote="a turn")
     assert ok is True
     assert detail == {"session": "11111111-2222-3333-4444-555555555555", "pane": "%9",
@@ -697,7 +697,7 @@ def test_ask_without_a_uuid_still_delivers_but_shelves_nothing(monkeypatch, _ask
     monkeypatch.setattr(reply, "open_window", lambda *a, **k: ("%9", ""))
     monkeypatch.setattr(reply, "session_of_pane", lambda p, timeout=10.0: "")
     monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: "")
-    monkeypatch.setattr(reply, "_record_turn", lambda s, t: shelved.append(1))
+    monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": shelved.append(1))
     ok, detail = reply.ask("hi", "tok")
     assert ok is True and detail["session"] is None and shelved == []
 
