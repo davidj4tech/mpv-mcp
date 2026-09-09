@@ -174,7 +174,7 @@ def _capture_record(monkeypatch):
 
     class _BT:
         @staticmethod
-        def record_listener_turn(session, text):
+        def record_listener_turn(session, text, extras=None):
             seen.append((session, text))
             return True
 
@@ -192,12 +192,23 @@ def test_a_typed_prompt_is_recorded_as_a_listener_turn(monkeypatch):
     assert seen == [("s-1", "this chat doesn't show up")]
 
 
-def test_slash_commands_and_empties_are_not_conversation(monkeypatch):
+def test_empties_are_not_conversation(monkeypatch):
     seen = _capture_record(monkeypatch)
-    for prompt in ["/loop 5m foo", "", "   ", None]:
+    for prompt in ["", "   ", None]:
         H._handle_user_prompt({"prompt": prompt, "session_id": "s-1"})
     H._handle_user_prompt({"prompt": "hello"})   # no session: nowhere to file it
     assert seen == []
+
+
+def test_a_command_is_conversation_when_it_is_the_work(monkeypatch):
+    """It used to be dropped for starting with a slash, which left the reply
+    it asked for sitting in the chat with no cause above it. `/model` still
+    goes: it changes the tool, not what was being talked about."""
+    seen = _capture_record(monkeypatch)
+    H._handle_user_prompt({"prompt": "/loop 5m foo", "session_id": "s-1"})
+    H._handle_user_prompt({"prompt": "<command-name>/model</command-name>",
+                           "session_id": "s-1"})
+    assert seen == [("s-1", "/loop 5m foo")]
 
 
 def test_a_paste_is_skipped_not_truncated(monkeypatch):

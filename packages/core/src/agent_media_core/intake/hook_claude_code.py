@@ -1081,12 +1081,22 @@ def _handle_user_prompt(payload: dict) -> int:
     being read aloud and shelved as the listener's turns. `strip_system_blocks`
     takes them out and keeps whatever the person actually typed.
     """
-    text = strip_system_blocks(str(payload.get("prompt") or ""))
+    raw = str(payload.get("prompt") or "")
     session = payload.get("session_id") or ""
-    if not text or not session:
+    if not session:
         return 0
-    # A slash command is an instruction to the harness, not something said.
-    if text.startswith("/"):
+    # A slash command is an instruction rather than a sentence, and some of
+    # them are instructions to the tool rather than to the work. `slash` holds
+    # that judgement so the reply box makes it the same way.
+    from .. import slash
+
+    if slash.parse(raw) is not None:
+        cmd = slash.turn_for(raw, session)
+        if cmd is None:
+            return 0
+        return _record_listener_text(session, cmd["text"], extras={"command": cmd})
+    text = strip_system_blocks(raw)
+    if not text:
         return 0
     if len(text) > PROMPT_RECORD_LIMIT:
         log.info("hook: prompt of %d chars not recorded (paste)", len(text))
@@ -1094,7 +1104,8 @@ def _handle_user_prompt(payload: dict) -> int:
     return _record_listener_text(session, text)
 
 
-def _record_listener_text(session: str, text: str) -> int:
+def _record_listener_text(session: str, text: str,
+                          extras: "dict | None" = None) -> int:
     """Add `text` to the conversation as a listener turn, off the hook's clock.
 
     Detached like playback: the render takes a second or two and must not sit
@@ -1105,7 +1116,7 @@ def _record_listener_text(session: str, text: str) -> int:
         try:
             from agent_media_core import book_tracks
 
-            book_tracks.record_listener_turn(session, text)
+            book_tracks.record_listener_turn(session, text, extras=extras)
         except Exception as e:  # noqa: BLE001 — the prompt reached Claude either way
             log.warning("hook: could not record the prompt (%s)", e)
 

@@ -98,3 +98,30 @@ def test_the_answer_is_recorded_as_a_listener_turn(monkeypatch):
     recorded.clear()
     H._handle_posttooluse({"tool_name": "Bash", "session_id": "s1", "tool_response": {}})
     assert not recorded
+
+
+# --- slash commands ----------------------------------------------------------
+
+def test_a_work_command_becomes_a_turn_and_a_settings_one_does_not(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(H, "_record_listener_text",
+                        lambda s, t, extras=None: recorded.append((t, extras)) or 0)
+    monkeypatch.setattr(H, "_handle_user_prompt", H._handle_user_prompt)
+
+    H._handle_user_prompt({"prompt": "/code-review high", "session_id": "s1"})
+    assert recorded[-1][0] == "/code-review high"
+    assert recorded[-1][1]["command"]["name"] == "code-review"
+
+    recorded.clear()
+    H._handle_user_prompt({"prompt": "<command-name>/model</command-name>"
+                                     "<command-args></command-args>", "session_id": "s1"})
+    assert not recorded
+
+
+def test_a_path_is_not_a_command(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(H, "_record_listener_text",
+                        lambda s, t, extras=None: recorded.append((t, extras)) or 0)
+    H._handle_user_prompt({"prompt": "/home/ryer/notes.md is the one",
+                           "session_id": "s1"})
+    assert recorded == [("/home/ryer/notes.md is the one", None)]

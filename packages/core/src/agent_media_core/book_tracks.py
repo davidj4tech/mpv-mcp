@@ -234,7 +234,8 @@ def _listener_turn_recently(store, session: str, text: str, now: float) -> bool:
     return False
 
 
-def record_listener_turn(session: str, text: str, *, store=None) -> bool:
+def record_listener_turn(session: str, text: str, *, store=None,
+                         extras: Optional[dict] = None) -> bool:
     """Render a reply the listener typed and add it to the conversation.
 
     Returns whether the turn was recorded. A failed render is not fatal to the
@@ -293,7 +294,11 @@ def record_listener_turn(session: str, text: str, *, store=None) -> bool:
             extras={"source_session": session, "listener": True,
                     "engine": engine, "voice": voice,
                     "clip_uris": [str(out)], "clip_sentences": [text],
-                    "clip_durations_s": [dur]})
+                    "clip_durations_s": [dur],
+                    # A slash command rides along as `command`, so the chat can
+                    # show it as the instruction it is rather than a sentence
+                    # somebody said out loud.
+                    **(extras or {})})
     except Exception as e:  # noqa: BLE001 — the reply already landed
         log.warning("book-tracks: could not record a listener turn (%s)", e)
         return False
@@ -762,7 +767,7 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
             except Exception as e:  # noqa: BLE001 — a log without times still reads
                 log.warning("book-tracks: no track offsets for the log (%s)", e)
 
-    def _line(who_listener, text, pos, at=None, key="", ask=None):
+    def _line(who_listener, text, pos, at=None, key="", ask=None, command=None):
         text = (text or "").strip()
         who = "you" if who_listener else "agent"
         if who == "you" and text.startswith("You: "):
@@ -773,6 +778,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
         # it — the canvas attaches the picture drawn for a reply by its key.
         line = {"start": pos.get("start"), "end": pos.get("end"),
                 "who": who, "text": text, "at": at, "key": key or ""}
+        if command:
+            line["command"] = command
         if ask:
             # The spoken sentence is "host / pane: Question. Option 1: …" —
             # right for a voice, wrong for a bubble. Hand over the structure
@@ -808,7 +815,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
         out.append(_line(spoken and spoken.listener,
                          spoken.text if spoken else turn.get("title"), pos,
                          at, spoken.key if spoken else "",
-                         ask=(spoken.ask if spoken else None)))
+                         ask=(spoken.ask if spoken else None),
+                         command=(spoken.command if spoken else None)))
 
     # The live tail: turns in speech history the manifest has not caught up to
     # yet. Shown at once, with no position — the audio item does not place them
@@ -818,7 +826,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     for at in sorted(a for a in said if a not in seen):
         seen.add(at)
         out.append(_line(said[at].listener, said[at].text, {}, at,
-                         said[at].key, ask=said[at].ask))
+                         said[at].key, ask=said[at].ask,
+                         command=said[at].command))
 
     # The turn speaking right now, if it has not already landed as an ended
     # row above. This is what puts a reply on screen *while* it is being

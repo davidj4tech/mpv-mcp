@@ -42,6 +42,7 @@ def test_the_line_a_reader_gets_is_the_question_not_the_announcement(monkeypatch
         listener: bool = False
         key: str = ""
         ask: list = field(default_factory=list)
+        command: dict = field(default_factory=dict)
 
     monkeypatch.setattr(book_tracks, "_read_manifest", lambda s: {"turns": []})
     monkeypatch.setattr(book_tracks, "_abs_ready", lambda target=None: None)
@@ -68,6 +69,7 @@ def test_the_harnesss_own_asides_are_not_shown_as_listener_turns(monkeypatch):
         listener: bool = False
         key: str = ""
         ask: list = field(default_factory=list)
+        command: dict = field(default_factory=dict)
 
     monkeypatch.setattr(book_tracks, "_read_manifest", lambda s: {"turns": []})
     monkeypatch.setattr(book_tracks, "_abs_ready", lambda target=None: None)
@@ -92,3 +94,28 @@ def test_a_question_from_before_the_options_were_kept_stays_out(tmp_path, monkey
                   "clip_uris": [str(clip)]})]
     monkeypatch.setattr(session_feed, "_ffprobe_duration", lambda p: 1.0, raising=False)
     assert session_feed.turns("s1", store=_Store(rows)) == []
+
+
+def test_a_command_reaches_the_reader_as_a_command(monkeypatch):
+    from dataclasses import dataclass, field
+
+    cmd = {"name": "code-review", "args": "high", "text": "/code-review high"}
+
+    @dataclass
+    class T:
+        at: float
+        text: str
+        listener: bool = False
+        key: str = ""
+        ask: list = field(default_factory=list)
+        command: dict = field(default_factory=dict)
+
+    monkeypatch.setattr(book_tracks, "_read_manifest", lambda s: {"turns": []})
+    monkeypatch.setattr(book_tracks, "_abs_ready", lambda target=None: None)
+    monkeypatch.setattr(book_tracks, "_live_turn", lambda s: None)
+    monkeypatch.setattr(book_tracks.session_feed, "turns",
+                        lambda s: [T(at=1.0, text="You: /code-review high",
+                                     listener=True, command=cmd)])
+    lines = book_tracks.conversation_log("s1", __import__("pathlib").Path("/tmp/x"))
+    assert lines[0]["command"] == cmd
+    assert lines[0]["text"] == "/code-review high"      # the "You: " label is the chapter's

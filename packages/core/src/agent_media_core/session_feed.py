@@ -94,6 +94,9 @@ class Turn:
     #: were spoken with a location label and the options run together, so a
     #: reader wants the structure rather than the sentence.
     ask: list = field(default_factory=list)
+    #: The slash command this turn was, when it was one: `{name, args, text}`.
+    #: A command is an instruction, not a sentence, and reads as one.
+    command: dict = field(default_factory=dict)
 
     @property
     def title(self) -> str:
@@ -164,6 +167,7 @@ def turns(session: str, *, store=None) -> list[Turn]:
                         listener=bool(ex.get("listener")),
                         key=str(ex.get("dedup_key") or ""),
                         ask=(ex.get("ask") if isinstance(ex.get("ask"), list) else []),
+                        command=(ex.get("command") if isinstance(ex.get("command"), dict) else {}),
                         workspace=(ex.get("source_tmux_session") or "").strip()))
     out.sort(key=lambda t: t.at)
     return out

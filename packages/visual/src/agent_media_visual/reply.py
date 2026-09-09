@@ -890,8 +890,19 @@ def _record_turn(session: str, text: str) -> None:
     """
     def run() -> None:
         try:
-            from agent_media_core import book_tracks
+            from agent_media_core import book_tracks, slash
 
+            # The same rule the prompt hook uses. Without it this path recorded
+            # and spoke every slash command typed into the box while the
+            # terminal dropped them all — one conversation kept a turn that
+            # said only "You: /".
+            if slash.parse(text) is not None:
+                cmd = slash.turn_for(text, session)
+                if cmd is None:
+                    return
+                book_tracks.record_listener_turn(session, cmd["text"],
+                                                 extras={"command": cmd})
+                return
             book_tracks.record_listener_turn(session, text)
         except Exception as e:  # noqa: BLE001 — the reply already landed
             print(f"reply: could not shelve the listener's turn ({e})",
