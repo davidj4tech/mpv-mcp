@@ -1024,7 +1024,7 @@ def _title_of(session: str, index: list[dict] | None = None) -> str:
 
 
 def ask_routed(text: str, bearer: str, *, target: str = "", player_item: str = "",
-               sticky: str = "", parse: bool = True) -> tuple[bool, dict]:
+               sticky: str = "", parse: bool = True, dry: bool = False) -> tuple[bool, dict]:
     """The assistant button's words, sent where they belong.
 
     In order: a target the app names outright (`target`, a session uuid from
@@ -1033,7 +1033,9 @@ def ask_routed(text: str, bearer: str, *, target: str = "", player_item: str = "
     in the player (`player_item`, an ABS item id); the session the button
     last spoke to (`sticky`); else a fresh session. A spoken name that fits
     more than one conversation is not sent anywhere — the candidates go back
-    for the app to ask.
+    for the app to ask. `dry` answers where the words WOULD go and sends
+    nothing: the app confirms a guess (a spoken name, the player, the last
+    thread) with the listener before committing with an explicit `target`.
     """
     text = " ".join((text or "").split())
     if not text:
@@ -1074,6 +1076,11 @@ def ask_routed(text: str, bearer: str, *, target: str = "", player_item: str = "
         if not session and sticky and _UUID.fullmatch(sticky) and session_exists(sticky):
             session, how = sticky, "sticky"
 
+    if dry:
+        item, ready = item_for_session(session, bearer) if session else (None, False)
+        return True, {"mode": "continued" if session else "new", "how": how or "default",
+                      "session": session or None, "title": _title_of(session, index) if session else "",
+                      "item": item if ready else None, "text": text, "dry": True}
     if not session:
         ok, detail = ask(text, bearer)
         if ok:

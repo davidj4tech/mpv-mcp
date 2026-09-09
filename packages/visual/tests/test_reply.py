@@ -954,3 +954,12 @@ def test_routed_ask_a_bare_name_switches_and_sends_nothing(_router):
     ok, d = reply.ask_routed("reply to digital assistant", "tok")
     assert ok and d["mode"] == "switched" and d["title"] == "Sasonica default digital assistant" and d["item"] == "li_9"
     assert _router == {}
+
+
+def test_routed_ask_dry_run_says_where_without_sending(_router):
+    ok, d = reply.ask_routed("reply to digital assistant does the earbud work", "tok", dry=True)
+    assert ok and d["dry"] is True and d["mode"] == "continued" and d["how"] == "spoken"
+    assert d["session"].startswith("aaaaaaaa") and d["text"] == "does the earbud work" and d["item"] == "li_9"
+    ok, d = reply.ask_routed("what is the time", "tok", dry=True)
+    assert d["mode"] == "new" and d["how"] == "default" and d["session"] is None
+    assert _router == {}

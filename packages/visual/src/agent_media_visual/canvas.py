@@ -1636,7 +1636,8 @@ class Handler(BaseHTTPRequestHandler):
                 target=str(body.get("target") or ""),
                 player_item=str(body.get("player_item") or ""),
                 sticky=str(body.get("sticky") or ""),
-                parse=body.get("parse", True) is not False)
+                parse=body.get("parse", True) is not False,
+                dry=body.get("dry") is True)
             status = detail.pop("status", 400)
             if not ok:
                 print(f"ask: refused {status} ({detail.get('error')}) "
