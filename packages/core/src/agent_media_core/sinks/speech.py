@@ -35,14 +35,14 @@ BROKER_TTL_S = 20.0
 
 def _broker_default_volume() -> float:
     """The broker's configured resting volume — the same MEDIA_SPEECH_VOLUME the
-    `sink-speech` run script launches mpv with (default 150, louder than mpv's
+    `sink-speech` run script launches mpv with (default 130, louder than mpv's
     nominal 100). unduck restores to this so a duck cycle can't quietly pull
     speech below its intended level. Keep the two defaults in step: a mismatch
     means the first duck/unduck cycle silently re-levels the broker."""
     try:
-        return float(os.environ.get("MEDIA_SPEECH_VOLUME", "150"))
+        return float(os.environ.get("MEDIA_SPEECH_VOLUME", "130"))
     except (TypeError, ValueError):
-        return 150.0
+        return 130.0
 
 
 def _broker_max_volume() -> float:

@@ -96,7 +96,7 @@ rm -f "$SOCK"
 # above it we also lift --volume-max (mpv clamps --volume to it). Amplifying
 # past 100 risks clipping on already-hot clips — that's exactly what the
 # loudness filter below guards against by normalizing peaks. Both overridable.
-: "${MEDIA_SPEECH_VOLUME:=150}"
+: "${MEDIA_SPEECH_VOLUME:=130}"
 : "${MEDIA_SPEECH_VOLUME_MAX:=200}"
 # Per-stream loudness normalization (EBU R128-ish). Each channel is its own
 # mpv/Mopidy, so we can't read the music's live level — but pulling every
