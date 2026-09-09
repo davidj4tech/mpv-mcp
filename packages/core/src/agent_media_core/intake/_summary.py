@@ -102,7 +102,8 @@ def _resolve_api_key() -> str:
             or os.environ.get("OPENAI_API_KEY") or "")
 
 
-def _chat(system_prompt: str, user_text: str, timeout: int) -> str | None:
+def _chat(system_prompt: str, user_text: str, timeout: int,
+          model: str | None = None) -> str | None:
     """POST one system+user turn to the configured OpenAI-compatible endpoint
     and return the assistant text, or ``None`` on any problem (empty/HTTP/JSON/
     timeout). Never raises. Shared by the summary and describe paths."""
@@ -113,7 +114,7 @@ def _chat(system_prompt: str, user_text: str, timeout: int) -> str | None:
             or os.environ.get("OPENAI_BASE_URL")
             or DEFAULT_BASE_URL).rstrip("/")
     api_key = _resolve_api_key()
-    model = os.environ.get("MEDIA_SUMMARY_MODEL") or DEFAULT_MODEL
+    model = model or os.environ.get("MEDIA_SUMMARY_MODEL") or DEFAULT_MODEL
 
     body = json.dumps({
         "model": model,

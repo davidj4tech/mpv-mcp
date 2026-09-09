@@ -10,23 +10,29 @@ def _state(monkeypatch, tmp_path):
 
 def test_suggest_files_the_cleaned_line(monkeypatch, tmp_path):
     _state(monkeypatch, tmp_path)
-    monkeypatch.setattr(_summary, "_chat", lambda p, t, timeout: '"Next: go with projects, do the relabel."\n')
+    seen = {}
+    def chat(p, t, timeout, model=None):
+        seen["model"] = model
+        return '"Next: go with projects, do the relabel."\n'
+    monkeypatch.setattr(_summary, "_chat", chat)
+    monkeypatch.setenv("MEDIA_FOLLOWUP_MODEL", "tiny")
     out = fu.suggest_followup("A long reply.", "sess-1", "k1")
     assert out == "go with projects, do the relabel."
+    assert seen["model"] == "tiny"
     assert fu.load_followup("sess-1") == {"text": out, "key": "k1", "at": fu.load_followup("sess-1")["at"]}
 
 
 def test_a_failed_call_files_nothing_and_keeps_the_last(monkeypatch, tmp_path):
     _state(monkeypatch, tmp_path)
     fu.save_followup("sess-1", "earlier", "k0")
-    monkeypatch.setattr(_summary, "_chat", lambda p, t, timeout: None)
+    monkeypatch.setattr(_summary, "_chat", lambda p, t, timeout, model=None: None)
     assert fu.suggest_followup("A reply.", "sess-1", "k1") is None
     assert fu.load_followup("sess-1")["key"] == "k0"
 
 
 def test_an_essay_is_not_a_prompt(monkeypatch, tmp_path):
     _state(monkeypatch, tmp_path)
-    monkeypatch.setattr(_summary, "_chat", lambda p, t, timeout: "x" * 300)
+    monkeypatch.setattr(_summary, "_chat", lambda p, t, timeout, model=None: "x" * 300)
     assert fu.suggest_followup("A reply.", "sess-1", "k1") is None
 
 

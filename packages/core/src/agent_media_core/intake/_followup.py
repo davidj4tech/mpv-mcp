@@ -13,7 +13,12 @@ Config (env):
   MEDIA_FOLLOWUP          "0" to switch it off (default on)
   MEDIA_FOLLOWUP_PROMPT   override the system prompt
   MEDIA_FOLLOWUP_TIMEOUT  request timeout seconds (default: the summary's)
-Model, endpoint and key are the summary gateway's (MEDIA_SUMMARY_*).
+  MEDIA_FOLLOWUP_MODEL    chat model (default: the summary's). The summary's
+                          local model takes half a minute on red5's CPU for
+                          a one-line answer; a small hosted model is the fit
+                          here — twelve words, nothing private in the ask
+                          that the reply itself has not already said aloud.
+Endpoint and key are the summary gateway's (MEDIA_SUMMARY_*).
 """
 
 from __future__ import annotations
@@ -90,7 +95,8 @@ def suggest_followup(raw_reply: str, session: str, key: str) -> str | None:
     prompt = os.environ.get("MEDIA_FOLLOWUP_PROMPT") or DEFAULT_PROMPT
     timeout = _int_env("MEDIA_FOLLOWUP_TIMEOUT",
                        _int_env("MEDIA_SUMMARY_TIMEOUT", DEFAULT_TIMEOUT))
-    out = _clean(_chat(prompt, text, timeout) or "")
+    model = os.environ.get("MEDIA_FOLLOWUP_MODEL") or None
+    out = _clean(_chat(prompt, text, timeout, model=model) or "")
     if not out or len(out) > 200:
         return None
     save_followup(session, out, key)
