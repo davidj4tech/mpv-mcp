@@ -35,6 +35,7 @@ Config (env):
 
 from __future__ import annotations
 
+import difflib
 import glob
 import json
 import logging
@@ -885,6 +886,176 @@ def conversation_for_session(session: str, bearer: str) -> tuple[bool, dict]:
                   "resumable": session_exists(session)}
 
 
+# --- which conversation the phone means -----------------------------------------
+
+_SPINNER = re.compile(r"^[\s\u2700-\u27bf\u2600-\u26ff\u25d0-\u25d3\u2b50*·]+")
+
+
+def _pane_titles() -> dict[str, str]:
+    """`{pane: title}` for every Claude Code pane — the session's own title."""
+    out = _tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_current_command}\t#{pane_title}"])
+    titles = {}
+    for line in out.splitlines():
+        f = line.split("\t")
+        if len(f) >= 3 and f[1] == "claude":
+            titles[f[0]] = _SPINNER.sub("", f[2]).strip()
+    return titles
+
+
+def _recent_conversations(limit: int = 40) -> list[tuple[str, str, float]]:
+    """`[(session, title, last modified)]` from the shelf, newest first."""
+    rows = []
+    for f in _manifest_dir().glob("*.json"):
+        try:
+            data = json.loads(f.read_text())
+            at = f.stat().st_mtime
+        except (OSError, ValueError):
+            continue
+        sid = str(data.get("session") or f.stem)
+        title = os.path.basename(str(data.get("folder") or "")).strip()
+        if sid and title:
+            rows.append((sid, title, at))
+    rows.sort(key=lambda r: -r[2])
+    return rows[:limit]
+
+
+def sessions_index() -> list[dict]:
+    """What the assistant button can be pointed at: live sessions first, by
+    the title on their pane, then recently shelved conversations by their
+    folder name. One row per session; a live one that is also on the shelf
+    is listed once, live.
+    """
+    live = live_sessions()
+    titles = _pane_titles()
+    seen: set[str] = set()
+    out = []
+    for sid, pane in live.items():
+        title = titles.get(pane) or ""
+        if not title:
+            continue
+        seen.add(sid)
+        out.append({"session": sid, "title": title, "live": True, "pane": pane})
+    for sid, title, at in _recent_conversations():
+        if sid in seen:
+            continue
+        seen.add(sid)
+        out.append({"session": sid, "title": title, "live": False, "pane": None, "at": at})
+    return out
+
+
+_NEW = re.compile(r"^\s*(?:(?:start|open)\s+a\s+)?(?:new|fresh)\s+(?:chat|conversation|session|thread)\b[\s,.:;!-]*(.*)$",
+                  re.I | re.S)
+_TO = re.compile(r"^\s*(?:reply\s+(?:to|in)|continue|switch\s+to|back\s+to|go\s+to|in|to|tell)\s+"
+                 r"(?:the\s+)?(.+?)(?:\s+(?:chat|conversation|session|thread))?\s*[,:;.-]\s+(.+)$",
+                 re.I | re.S)
+
+
+def _score(name: str, title: str) -> float:
+    a, b = name.lower().strip(), title.lower().strip()
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    if a in b:
+        return 0.9
+    words = [w for w in re.findall(r"[a-z0-9]+", a) if len(w) > 2]
+    if words and all(w in b for w in words):
+        return 0.85
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def resolve_target(text: str, index: list[dict]) -> tuple[str, dict | list | None, str]:
+    """What the spoken words say about where they go. `(kind, hit, rest)`.
+
+    `kind` is "new" ("new chat, …" — the rest goes to a fresh session),
+    "session" (`hit` is the index row named, the rest is the message),
+    "ambiguous" (`hit` is the rows it could be, and nothing should be sent),
+    or "" (no target spoken; `rest` is the whole text).
+    """
+    m = _NEW.match(text or "")
+    if m:
+        return "new", None, m.group(1).strip()
+    m = _TO.match(text or "")
+    if not m:
+        return "", None, (text or "").strip()
+    name, rest = m.group(1).strip(), m.group(2).strip()
+    scored = sorted(((_score(name, row["title"]), row) for row in index),
+                    key=lambda r: -r[0])
+    if not scored or scored[0][0] < 0.6:
+        return "", None, (text or "").strip()
+    best = scored[0][0]
+    close = [row for sc, row in scored if sc >= 0.6 and best - sc < 0.08]
+    if len(close) > 1 and best < 1.0:
+        return "ambiguous", close, rest
+    return "session", scored[0][1], rest
+
+
+def _title_of(session: str, index: list[dict] | None = None) -> str:
+    for row in index if index is not None else sessions_index():
+        if row["session"] == session:
+            return row["title"]
+    return ""
+
+
+def ask_routed(text: str, bearer: str, *, target: str = "", player_item: str = "",
+               sticky: str = "", parse: bool = True) -> tuple[bool, dict]:
+    """The assistant button's words, sent where they belong.
+
+    In order: a target the app names outright (`target`, a session uuid from
+    its picker — "new" forces a fresh one); a target spoken at the start of
+    the words ("reply to drones, …", "new chat, …"); the conversation loaded
+    in the player (`player_item`, an ABS item id); the session the button
+    last spoke to (`sticky`); else a fresh session. A spoken name that fits
+    more than one conversation is not sent anywhere — the candidates go back
+    for the app to ask.
+    """
+    text = " ".join((text or "").split())
+    if not text:
+        return False, {"error": "empty message"}
+    user, status = abs_identity(bearer)
+    if not user:
+        return False, _identity_error(status)
+    ok, why = may_reply(user)
+    if not ok:
+        return False, {"error": why, "status": 403}
+
+    index = sessions_index()
+    session, how = "", ""
+    if target == "new":
+        how = "asked"
+    elif target:
+        session, how = target, "picked"
+    elif parse:
+        kind, hit, rest = resolve_target(text, index)
+        if kind == "new":
+            text, how = rest or text, "spoken"
+        elif kind == "session":
+            session, text, how = hit["session"], rest, "spoken"
+        elif kind == "ambiguous":
+            return False, {"error": "which conversation?", "status": 300,
+                           "ambiguous": hit, "text": rest}
+    if not session and how != "spoken" and how != "asked":
+        if player_item:
+            sid, _why = session_for_item(player_item, bearer)
+            if sid:
+                session, how = sid, "player"
+        if not session and sticky and _UUID.fullmatch(sticky) and session_exists(sticky):
+            session, how = sticky, "sticky"
+
+    if not session:
+        ok, detail = ask(text, bearer)
+        if ok:
+            detail.update({"mode": "new", "how": how or "default", "title": "", "text": text})
+        return ok, detail
+    ok, detail = deliver(session, text, text)
+    if not ok:
+        return False, detail
+    item, ready = item_for_session(session, bearer)
+    detail.update({"mode": "continued", "how": how, "title": _title_of(session, index),
+                   "item": item if ready else None, "text": text})
+    return True, detail
+
+
 # --- the whole move -----------------------------------------------------------
 
 # Quote and reply go in on ONE line. `send-keys` types literally and then
@@ -975,6 +1146,18 @@ def reply(item: str, text: str, bearer: str, *, quote: str = "",
         return (not send_err), {"session": session, "pane": pane,
                                 "opened": True, "branched": True,
                                 **({"error": send_err} if send_err else {})}
+
+    return deliver(session, body, text)
+
+
+def deliver(session: str, body: str, text: str) -> tuple[bool, dict]:
+    """Put `body` into `session`'s live pane, reviving it if it has ended.
+
+    `text` is the listener's own words, shelved as their turn; `body` is what
+    is typed (the quote rides along in it). Shared by a reply from a
+    conversation's page and a reply the assistant button routed here.
+    """
+    from . import canvas
 
     pane = live_sessions().get(session, "")
     opened = False

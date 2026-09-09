@@ -24,9 +24,14 @@ Stdlib-only HTTP server. Endpoints:
   GET  /conversation?session=<uuid>   + an Audiobookshelf bearer →
                   a session the phone started: its item id once the library
                   has one, and whether it is live
-  POST /ask       {"text": "...", "quote": "..."} + an Audiobookshelf bearer →
-                  start a FRESH session in the scratch tmux session with that
-                  as its first message (the assistant button, "new chat")
+  POST /ask       {"text", "target"?, "player_item"?, "sticky"?, "parse"?}
+                  + an Audiobookshelf bearer → the assistant button's words,
+                  routed: a picked session, a session named in the words
+                  ("reply to drones, …"), the player's conversation, the one
+                  last spoken to, else a FRESH session in the scratch tmux
+                  session. 300 + candidates when a spoken name is ambiguous.
+  GET  /conversations  + an Audiobookshelf bearer → live sessions and
+                  recent conversations, by title (the picker)
   POST /focus     {"pane": "%23"} → bring the attached tmux client to a pane
   GET  /healthz   liveness
 
@@ -1441,6 +1446,19 @@ class Handler(BaseHTTPRequestHandler):
             ok, detail = _reply.log_for_item(item, bearer)
             self._json(200 if ok else detail.pop("status", 404),
                        {"ok": ok, **detail})
+        elif path == "/conversations":
+            # What the assistant button can be pointed at: live sessions and
+            # recent conversations, by title. Gated like /conversation.
+            # (/sessions is taken: the amux list the popup reads.)
+            from . import reply as _reply
+            bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer").strip()
+            user, status = _reply.abs_identity(bearer)
+            allowed = bool(user) and _reply.may_reply(user)[0]
+            if not allowed:
+                self._json(403 if user else _reply._identity_error(status).get("status", 401),
+                           {"ok": False, "error": "not allowed"})
+            else:
+                self._json(200, {"ok": True, "sessions": _reply.sessions_index()})
         elif path == "/speech":
             # One-shot speech-state peek for outside agents (a voice-mode
             # Claude asking "is the phone talking, and about what?" through
@@ -1613,8 +1631,12 @@ class Handler(BaseHTTPRequestHandler):
             from . import reply as _reply
             body = self._read_json() or {}
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer").strip()
-            ok, detail = _reply.ask(str(body.get("text") or ""), bearer,
-                                    quote=str(body.get("quote") or ""))
+            ok, detail = _reply.ask_routed(
+                str(body.get("text") or ""), bearer,
+                target=str(body.get("target") or ""),
+                player_item=str(body.get("player_item") or ""),
+                sticky=str(body.get("sticky") or ""),
+                parse=body.get("parse", True) is not False)
             status = detail.pop("status", 400)
             if not ok:
                 print(f"ask: refused {status} ({detail.get('error')}) "

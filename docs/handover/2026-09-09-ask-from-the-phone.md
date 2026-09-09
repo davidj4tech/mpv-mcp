@@ -32,6 +32,19 @@ Selecting it once installed: the Settings picker, or over adb shell
 `cmd role add-role-holder android.app.role.ASSISTANT com.sasonica.app`
 (Termux's uid cannot).
 
+**Routing (later the same day).** `/ask` now sends the words where they
+belong, in this order: `target` (a session uuid the app picked; `new`
+forces fresh), a name spoken at the start of the words (`resolve_target`:
+"reply to drones, …", "in the assistant thread: …", "new chat, …" — fuzzy
+against `sessions_index()`, which is live panes by their title then the
+shelf by folder name), the conversation loaded in the player (`player_item`),
+the thread the button last spoke to (`sticky`, kept six hours on the phone),
+else a fresh session. A spoken name that fits two conversations is answered
+with status 300 and the candidates; the app shows them as a pick list and
+sends nothing. `GET /conversations` is the picker's list (`/sessions` was
+already amux's). The answer carries `mode` (new/continued), `how`, `title`,
+and `item` when the library has it.
+
 ## Four things learned the hard way
 
 - **A tmux session made from under systemd has no `claude` on its PATH.**

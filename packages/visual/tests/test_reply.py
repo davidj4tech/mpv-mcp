@@ -837,3 +837,101 @@ def test_log_offers_the_suggestion_for_its_last_reply(monkeypatch, tmp_path):
     ok, detail = reply.log_for_item("item1", "tok")
     assert ok and detail["suggestion"] == "do the thing"
     assert seen == {"session": "sess-1", "last_key": "k9"}
+
+
+# --- where the assistant button's words go ---------------------------------------
+
+_IDX = [
+    {"session": "aaaaaaaa-1111-2222-3333-444444444444", "title": "Sasonica default digital assistant", "live": True, "pane": "%1"},
+    {"session": "bbbbbbbb-1111-2222-3333-444444444444", "title": "scratch - Automated drone videography system", "live": False, "pane": None},
+    {"session": "cccccccc-1111-2222-3333-444444444444", "title": "scratch - Drone battery choice", "live": False, "pane": None},
+]
+
+
+def test_resolve_target_new_chat_prefix():
+    assert reply.resolve_target("New chat, what is the time", _IDX) == ("new", None, "what is the time")
+    assert reply.resolve_target("start a new conversation: hello", _IDX)[0] == "new"
+
+
+def test_resolve_target_names_a_session_and_strips_the_prefix():
+    kind, hit, rest = reply.resolve_target("reply to digital assistant, does the earbud work", _IDX)
+    assert kind == "session" and hit["session"].startswith("aaaaaaaa") and rest == "does the earbud work"
+    kind, hit, rest = reply.resolve_target("in the videography chat: add a gimbal", _IDX)
+    assert kind == "session" and hit["session"].startswith("bbbbbbbb") and rest == "add a gimbal"
+
+
+def test_resolve_target_is_not_fooled_by_ordinary_sentences():
+    assert reply.resolve_target("what is the weather in Melbourne today", _IDX) == ("", None, "what is the weather in Melbourne today")
+    assert reply.resolve_target("tell me a joke", _IDX)[0] == ""
+    # A named thing that matches nothing is just a message.
+    assert reply.resolve_target("reply to the milkman, two pints please", _IDX)[0] == ""
+
+
+def test_resolve_target_reports_ambiguity_instead_of_guessing():
+    kind, hit, rest = reply.resolve_target("reply to drone, go on", _IDX)
+    assert kind == "ambiguous" and {r["session"][:8] for r in hit} == {"bbbbbbbb", "cccccccc"} and rest == "go on"
+
+
+def test_sessions_index_lists_live_by_pane_title_then_the_shelf(tmp_path, monkeypatch):
+    live = "aaaaaaaa-1111-2222-3333-444444444444"
+    old = "bbbbbbbb-1111-2222-3333-444444444444"
+    monkeypatch.setattr(reply, "live_sessions", lambda: {live: "%1", "dddddddd-0000-0000-0000-000000000000": "%2"})
+    monkeypatch.setattr(reply, "_pane_titles", lambda: {"%1": "Sasonica default digital assistant"})
+    _manifests(tmp_path, monkeypatch, [(live, "/c/scratch/scratch - Same one, live"),
+                                       (old, "/c/scratch/scratch - Drones")])
+    rows = reply.sessions_index()
+    assert [(r["session"][:8], r["title"], r["live"]) for r in rows] == [
+        ("aaaaaaaa", "Sasonica default digital assistant", True),   # live wins, by pane title
+        ("bbbbbbbb", "scratch - Drones", False)]                    # %2 has no title: skipped
+
+
+@pytest.fixture
+def _router(monkeypatch, _asker):
+    monkeypatch.setattr(reply, "sessions_index", lambda: _IDX)
+    monkeypatch.setattr(reply, "item_for_session", lambda s, b: ("li_9", True))
+    monkeypatch.setattr(reply, "session_exists", lambda s: True)
+    sent = {}
+    monkeypatch.setattr(reply, "deliver", lambda s, body, text: sent.update(session=s, body=body) or (True, {"session": s, "pane": "%1", "opened": False}))
+    monkeypatch.setattr(reply, "ask", lambda text, bearer, **k: sent.update(fresh=text) or (True, {"session": "new-1", "pane": "%9", "opened": True, "fresh": True}))
+    return sent
+
+
+def test_routed_ask_follows_a_spoken_target(_router):
+    ok, d = reply.ask_routed("reply to digital assistant, does the earbud work", "tok")
+    assert ok and d["mode"] == "continued" and d["how"] == "spoken" and d["item"] == "li_9"
+    assert d["title"] == "Sasonica default digital assistant"
+    assert _router == {"session": "aaaaaaaa-1111-2222-3333-444444444444", "body": "does the earbud work"}
+
+
+def test_routed_ask_spoken_new_chat_beats_player_and_sticky(_router):
+    ok, d = reply.ask_routed("new chat, what is the time", "tok",
+                             player_item="item1", sticky="cccccccc-1111-2222-3333-444444444444")
+    assert ok and d["mode"] == "new" and d["how"] == "spoken" and _router == {"fresh": "what is the time"}
+
+
+def test_routed_ask_prefers_a_picked_target_over_the_words(_router):
+    ok, d = reply.ask_routed("reply to digital assistant, hi", "tok",
+                             target="cccccccc-1111-2222-3333-444444444444")
+    assert d["how"] == "picked" and _router["session"].startswith("cccccccc")
+    assert _router["body"] == "reply to digital assistant, hi"     # picked: the words are not parsed
+
+
+def test_routed_ask_then_the_player_then_sticky_then_new(_router, monkeypatch):
+    monkeypatch.setattr(reply, "session_for_item", lambda item, b: ("bbbbbbbb-1111-2222-3333-444444444444", "") if item == "playing" else (None, "no"))
+    ok, d = reply.ask_routed("go on", "tok", player_item="playing", sticky="cccccccc-1111-2222-3333-444444444444")
+    assert d["how"] == "player" and _router["session"].startswith("bbbbbbbb")
+    ok, d = reply.ask_routed("go on", "tok", player_item="a book", sticky="cccccccc-1111-2222-3333-444444444444")
+    assert d["how"] == "sticky" and _router["session"].startswith("cccccccc")
+    ok, d = reply.ask_routed("go on", "tok")
+    assert d["mode"] == "new" and d["how"] == "default" and _router["fresh"] == "go on"
+
+
+def test_routed_ask_sends_nothing_when_the_name_is_ambiguous(_router):
+    ok, d = reply.ask_routed("reply to drone, go on", "tok")
+    assert ok is False and d["status"] == 300 and len(d["ambiguous"]) == 2 and d["text"] == "go on"
+    assert _router == {}
+
+
+def test_routed_ask_target_new_forces_a_fresh_session(_router):
+    ok, d = reply.ask_routed("reply to digital assistant, hi", "tok", target="new", sticky="cccccccc-1111-2222-3333-444444444444")
+    assert d["mode"] == "new" and d["how"] == "asked" and _router == {"fresh": "reply to digital assistant, hi"}
