@@ -275,7 +275,7 @@ def test_focus_walks_the_client_to_the_pane(monkeypatch):
 # --- "should the app draw a reply box here?" -----------------------------------
 
 def test_conversation_says_yes_for_a_live_one(monkeypatch):
-    monkeypatch.setattr(reply, "ghost_prompt", lambda pane: "sp4 is up now too")
+    monkeypatch.setattr(reply, "suggestion_for", lambda *a, **k: "sp4 is up now too")
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
     monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
     monkeypatch.setattr(reply, "session_for_item", lambda *a, **k: ("sess-1", ""))
@@ -791,3 +791,49 @@ def test_ensure_submitted_trusts_an_empty_box(monkeypatch):
     monkeypatch.setattr(reply, "_tmux", lambda argv, timeout=10: pytest.fail("pressed Enter"))
     monkeypatch.setattr(reply.time, "sleep", lambda s: None)
     reply._ensure_submitted("%1", "what is the time today", timeout=0.01)
+
+
+def test_a_ghost_that_fits_is_the_suggestion(monkeypatch):
+    monkeypatch.setattr(reply, "ghost_prompt", lambda pane: "sp4 is up now too")
+    monkeypatch.setattr(reply, "_followup", lambda s: {"text": "ours", "key": "k1"})
+    assert reply.suggestion_for("sess-1", "%1", "k1") == "sp4 is up now too"
+
+
+def test_a_truncated_ghost_gives_way_to_the_followup(monkeypatch):
+    monkeypatch.setattr(reply, "ghost_prompt", lambda pane: "enable the working event …")
+    monkeypatch.setattr(reply, "_followup", lambda s: {"text": "enable the working event hook", "key": "k1"})
+    assert reply.suggestion_for("sess-1", "%1", "k1") == "enable the working event hook"
+    # ...but not one written for an earlier reply
+    assert reply.suggestion_for("sess-1", "%1", "k2") == "enable the working event …"
+    # ...and the /conversation route, with no log in hand, takes it anyway
+    assert reply.suggestion_for("sess-1", "%1") == "enable the working event hook"
+
+
+def test_no_pane_still_has_the_followup(monkeypatch):
+    monkeypatch.setattr(reply, "ghost_prompt", lambda pane: (_ for _ in ()).throw(AssertionError("no pane")))
+    monkeypatch.setattr(reply, "_followup", lambda s: {"text": "ours", "key": "k1"})
+    assert reply.suggestion_for("sess-1", "", "k1") == "ours"
+    monkeypatch.setattr(reply, "_followup", lambda s: None)
+    assert reply.suggestion_for("sess-1", "", "k1") == ""
+
+
+def test_log_carries_no_suggestion_while_pending(monkeypatch, tmp_path):
+    _log_ready(monkeypatch, tmp_path,
+               [{"who": "agent", "text": "Hi", "key": "k1"}, {"who": "you", "text": "A question"}])
+    monkeypatch.setattr(reply, "suggestion_for", lambda *a, **k: "never")
+    ok, detail = reply.log_for_item("item1", "tok")
+    assert ok and detail["suggestion"] == ""
+
+
+def test_log_offers_the_suggestion_for_its_last_reply(monkeypatch, tmp_path):
+    _log_ready(monkeypatch, tmp_path,
+               [{"who": "you", "text": "A question"}, {"who": "agent", "text": "An answer", "key": "k9"}])
+    seen = {}
+    def fake(session, pane, last_key=None):
+        seen.update(session=session, last_key=last_key)
+        return "do the thing"
+    monkeypatch.setattr(reply, "suggestion_for", fake)
+    monkeypatch.setattr(reply, "live_sessions", lambda: {})
+    ok, detail = reply.log_for_item("item1", "tok")
+    assert ok and detail["suggestion"] == "do the thing"
+    assert seen == {"session": "sess-1", "last_key": "k9"}

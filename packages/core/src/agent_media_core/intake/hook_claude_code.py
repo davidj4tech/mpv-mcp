@@ -798,6 +798,16 @@ def _play_now(event: Event) -> None:
                          key=event.metadata.get("dedup_key") or "")
         except Exception:  # noqa: BLE001 — accompaniment, never playback's problem
             pass
+    # The follow-up (what the listener might say next) for the reply box in
+    # the player app: one gateway call on its own thread, filed per session.
+    followup_raw = event.metadata.pop("followup_raw", None)
+    if followup_raw:
+        try:
+            from ._followup import spawn_followup
+            spawn_followup(followup_raw, event.metadata.get("session") or "",
+                           event.metadata.get("dedup_key") or "")
+        except Exception:  # noqa: BLE001 — a suggestion, never playback's problem
+            pass
     if visual_raw and visual_reveal:
         # [[reveal:]]: speak up to the marker, hold until the canvas shows
         # the image (bounded — see wait_for_fresh_visual), then speak on.
@@ -989,6 +999,9 @@ def _handle_stop(payload: dict) -> int:
             post = strip_markdown(reveal_post or "")
             if pre and post:
                 metadata["visual_reveal"] = {"pre": pre, "post": post}
+    from ._followup import followup_enabled
+    if followup_enabled():
+        metadata["followup_raw"] = raw
     from ._summary import summary_enabled, summary_min_chars, describe_enabled
     if "visual_reveal" in metadata:
         # A reveal splits the mechanically-stripped text at an exact marker

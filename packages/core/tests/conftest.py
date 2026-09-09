@@ -97,3 +97,12 @@ def _no_follow_pane(monkeypatch):
     the test is asserting. A test that wants the coupling sets this itself.
     """
     monkeypatch.setenv("MEDIA_FOLLOW_AUTO", "0")
+
+
+@pytest.fixture(autouse=True)
+def _no_followup_calls(monkeypatch):
+    """The Stop hook's follow-up is a gateway call on a thread; a hook test
+    that runs the detached path would otherwise make it for real (and file
+    the answer in the developer's own state dir). Tests of the follow-up
+    itself re-enable it explicitly."""
+    monkeypatch.setenv("MEDIA_FOLLOWUP", "0")

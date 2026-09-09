@@ -429,6 +429,33 @@ def ghost_prompt(pane: str) -> str:
     return " ".join(" ".join(words).split())
 
 
+def _followup(session: str) -> dict | None:
+    from agent_media_core.intake._followup import load_followup
+    return load_followup(session)
+
+
+def suggestion_for(session: str, pane: str, last_key: str | None = None) -> str:
+    """What to offer as the next line: the real ghost when it fits, else ours.
+
+    The terminal draws the ghost to its own width and cuts it with an ellipsis
+    — 28 columns on a phone-sized tmux window — so a truncated ghost is
+    replaced by the follow-up the Stop hook wrote for the same reply (see
+    core intake/_followup.py). `last_key` is the log's last line: a follow-up
+    is only offered for the reply it was written for, so a turn that has
+    since moved on does not carry a stale line. None skips that check (the
+    /conversation route, which has no log in hand).
+    """
+    ghost = ghost_prompt(pane) if pane else ""
+    if ghost and not ghost.endswith("…"):
+        return ghost
+    fu = _followup(session)
+    if not fu:
+        return ghost
+    if last_key is not None and (fu.get("key") or "") != (last_key or ""):
+        return ghost
+    return str(fu.get("text") or "") or ghost
+
+
 # --- reviving a session that has ended -----------------------------------------
 
 
@@ -989,7 +1016,7 @@ def conversation(item: str, bearer: str) -> tuple[bool, dict]:
     pane = live_sessions().get(session, "")
     return True, {"session": session, "live": bool(pane), "pane": pane or None,
                   "resumable": session_exists(session),
-                  "suggestion": ghost_prompt(pane) if pane else ""}
+                  "suggestion": suggestion_for(session, pane)}
 
 
 def attach_pictures(lines: list) -> None:
@@ -1068,9 +1095,11 @@ def log_for_item(item: str, bearer: str) -> tuple[bool, dict]:
                 # few seconds after the turn it follows, so a one-off read at
                 # page-open would mostly find it not there yet.
                 pane = live_sessions().get(session, "")
+                last = lines[-1] if lines else {}
+                suggestion = ("" if pending else
+                              suggestion_for(session, pane, last.get("key") or ""))
                 return True, {"session": session, "lines": lines,
-                              "pending": pending,
-                              "suggestion": ghost_prompt(pane) if pane else ""}
+                              "pending": pending, "suggestion": suggestion}
     except Exception as e:  # noqa: BLE001
         # Say so in the journal as well as to the caller: the app folds every
         # failed fetch into an empty transcript, so this line is the only
