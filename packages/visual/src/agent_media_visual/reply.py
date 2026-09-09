@@ -1260,6 +1260,7 @@ def reply(item: str, text: str, bearer: str, *, quote: str = "",
             return False, {"error": err, "pane": pane or None}
         send_err = canvas._send_to_pane(pane, body)
         if not send_err:
+            _ensure_submitted(pane, body)
             _record_turn(session, text, pane)
         return (not send_err), {"session": session, "pane": pane,
                                 "opened": True, "branched": True,
@@ -1293,6 +1294,10 @@ def deliver(session: str, body: str, text: str) -> tuple[bool, dict]:
     send_err = canvas._send_to_pane(pane, body)
     if send_err:
         return False, {"error": send_err, "session": session, "pane": pane}
+    # A long reply's Enter can arrive while the TUI is still taking the text
+    # and be lost — the words sat in the box of a live session, unsent, until
+    # someone pressed Enter by hand. Look, and press it once if so.
+    _ensure_submitted(pane, body)
     _record_turn(session, text, pane)
     return True, {"session": session, "pane": pane, "opened": opened}
 

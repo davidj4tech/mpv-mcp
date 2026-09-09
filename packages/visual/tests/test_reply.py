@@ -182,6 +182,7 @@ def _allowed(monkeypatch):
     # tmp-dir monkeypatching — and "sess-1" duly appeared in the real library as
     # a conversation called "You: hi". Tests that care about it override this.
     monkeypatch.setattr(reply, "_record_turn", lambda s, t, p="": None)
+    monkeypatch.setattr(reply, "_ensure_submitted", lambda p, t, timeout=3.0: None)
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
     monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
     monkeypatch.setattr(reply, "session_for_item", lambda *a, **k: ("sess-1", ""))
@@ -1024,3 +1025,14 @@ def test_manage_needs_a_session_id_and_a_permitted_user(monkeypatch):
     assert reply.session_close("../x", "tok")[1]["status"] == 400
     monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "guest", "type": "user"}, 200))
     assert reply.session_resume(SID, "tok")[1]["status"] == 403
+
+
+def test_a_reply_into_a_live_pane_checks_its_enter_landed(monkeypatch, _allowed):
+    from agent_media_visual import canvas
+    checked = []
+    monkeypatch.setattr(reply, "live_sessions", lambda: {"sess-1": "%7"})
+    monkeypatch.setattr(canvas, "_pane_alive", lambda p: True)
+    monkeypatch.setattr(canvas, "_send_to_pane", lambda p, t: "")
+    monkeypatch.setattr(reply, "_ensure_submitted", lambda p, t, timeout=3.0: checked.append((p, t)))
+    ok, _ = reply.reply("item1", "a long message that the TUI is still taking when Enter arrives", "tok")
+    assert ok and checked == [("%7", "a long message that the TUI is still taking when Enter arrives")]
