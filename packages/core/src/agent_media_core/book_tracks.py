@@ -731,6 +731,13 @@ def _live_turn(session: str) -> Optional[dict]:
             "sentence": sentence, "offsets": offsets,
             "elapsed": round(max(0.0, now - base), 3),
             "delay": round(delay, 3),
+            # Whether the offsets were measured by the far player (sentence
+            # marks) or apportioned by character count — the second drifts
+            # within a reply, and a reader debugging a bold that runs ahead
+            # needs to know which it is looking at.
+            "measured": bool(ex.get("sentence_marks")),
+            "target": str(np.get("target") or ""),
+            "server_time": round(time.time(), 3),
             "paused": bool(paused_at)}
 
 
