@@ -963,3 +963,64 @@ def test_routed_ask_dry_run_says_where_without_sending(_router):
     ok, d = reply.ask_routed("what is the time", "tok", dry=True)
     assert d["mode"] == "new" and d["how"] == "default" and d["session"] is None
     assert _router == {}
+
+
+# --- resume and close --------------------------------------------------------------
+
+SID = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture
+def _manager(monkeypatch):
+    monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "d", "type": "root"}, 200))
+    monkeypatch.delenv("MEDIA_REPLY_ROOT", raising=False)
+    monkeypatch.setattr(reply, "_retag", lambda s: None)
+
+
+def test_resume_a_live_session_just_says_where(monkeypatch, _manager):
+    from agent_media_visual import canvas
+    monkeypatch.setattr(reply, "live_sessions", lambda: {SID: "%7"})
+    monkeypatch.setattr(canvas, "_pane_alive", lambda p: True)
+    monkeypatch.setattr(reply, "open_window", lambda *a, **k: pytest.fail("already live"))
+    ok, d = reply.session_resume(SID, "tok")
+    assert ok and d == {"session": SID, "pane": "%7", "live": True, "opened": False}
+
+
+def test_resume_revives_a_dead_session_in_its_directory(monkeypatch, _manager):
+    opened = []
+    monkeypatch.setattr(reply, "live_sessions", dict)
+    monkeypatch.setattr(reply, "session_exists", lambda s: True)
+    monkeypatch.setattr(reply, "transcript_cwd", lambda s: "/home/ryer/scratch")
+    monkeypatch.setattr(reply, "open_window", lambda s, cwd, *, resume, **k: opened.append((s, cwd, resume)) or ("%9", ""))
+    ok, d = reply.session_resume(SID, "tok")
+    assert ok and d["opened"] is True and d["pane"] == "%9"
+    assert opened == [(SID, "/home/ryer/scratch", True)]
+
+
+def test_resume_refuses_a_session_with_no_transcript(monkeypatch, _manager):
+    monkeypatch.setattr(reply, "live_sessions", dict)
+    monkeypatch.setattr(reply, "session_exists", lambda s: False)
+    ok, d = reply.session_resume(SID, "tok")
+    assert ok is False and d["status"] == 404
+
+
+def test_close_kills_only_the_pane_hosting_the_session(monkeypatch, _manager):
+    killed = []
+    monkeypatch.setattr(reply, "live_sessions", lambda: {SID: "%7"})
+    monkeypatch.setattr(reply, "_tmux", lambda argv, timeout=10: killed.append(argv) or "")
+    ok, d = reply.session_close(SID, "tok")
+    assert ok and d["closed"] is True and d["pane"] == "%7"
+    assert killed[0] == ["kill-pane", "-t", "%7"]
+
+
+def test_close_of_a_session_that_is_not_live_is_a_no_op(monkeypatch, _manager):
+    monkeypatch.setattr(reply, "live_sessions", dict)
+    monkeypatch.setattr(reply, "_tmux", lambda argv, timeout=10: pytest.fail("nothing to kill"))
+    ok, d = reply.session_close(SID, "tok")
+    assert ok and d["closed"] is False and d["live"] is False
+
+
+def test_manage_needs_a_session_id_and_a_permitted_user(monkeypatch):
+    assert reply.session_close("../x", "tok")[1]["status"] == 400
+    monkeypatch.setattr(reply, "abs_identity", lambda b: ({"username": "guest", "type": "user"}, 200))
+    assert reply.session_resume(SID, "tok")[1]["status"] == 403

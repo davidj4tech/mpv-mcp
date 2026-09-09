@@ -5512,6 +5512,13 @@ def cmd_feed(a) -> int:
                 if folder is not None and added]
         for _session, folder, added in grew:
             print(f"{folder}: +{added} track(s)")
+        if not sess:
+            # The sweep is also when a session that has ended stops being
+            # live: the tag is reconciled for every conversation, whether or
+            # not anything grew — a session usually ends without a new turn.
+            n = book_tracks.sync_live_tags()
+            if n:
+                print(f"live tag: {n} item(s) changed")
         if not grew:
             print("no new turns")
             # Asked about one conversation by name, answer about it anyway:

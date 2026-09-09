@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import re
 import shutil
 import time
@@ -877,6 +878,91 @@ def _series_position(session: str, folder: Path) -> str:
     return ""
 
 
+LIVE_TAG = "live"
+
+
+def live_session_ids() -> set[str]:
+    """The Claude Code sessions with a pane right now, by uuid.
+
+    The pane registry (`~/.claude/tmux-sessions/<pane>`: uuid, pid, cwd) says
+    which session each pane hosts, and is believed only while the pid it
+    names is alive and the pane still exists — a recycled pane id would
+    otherwise keep a finished session "live" for as long as the file lasts.
+    """
+    import glob as _glob
+    from .state.store import _pid_alive
+
+    try:
+        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id}"],
+                           capture_output=True, text=True, timeout=10)
+        panes = set(r.stdout.split()) if r.returncode == 0 else set()
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    root = os.path.expanduser(os.environ.get("MEDIA_PANE_REGISTRY_DIR") or "~/.claude/tmux-sessions")
+    out: set[str] = set()
+    for path in _glob.glob(os.path.join(root, "*")):
+        if f"%{os.path.basename(path)}" not in panes:
+            continue
+        try:
+            fields = open(path, encoding="utf-8").read().split()
+        except OSError:
+            continue
+        if not fields:
+            continue
+        if len(fields) >= 2 and fields[1].isdigit() and not _pid_alive(int(fields[1])):
+            continue
+        out.add(fields[0])
+    return out
+
+
+def _tags_for(session: str, have: list, live: Optional[set] = None) -> list:
+    """`have` with the live tag present or absent as the session is live."""
+    live = live_session_ids() if live is None else live
+    tags = [t for t in (have or []) if t != LIVE_TAG]
+    return tags + [LIVE_TAG] if session in live else tags
+
+
+def sync_live_tags(*, target=None, live: Optional[set] = None) -> int:
+    """Put the live tag on every conversation with a pane and take it off the
+    rest, on every server. How many items changed.
+
+    A closed session is not moved out of its series — the series says which
+    project it belonged to, which stays true — it just stops being live. The
+    app's Live shelf reads this tag.
+    """
+    servers = _abs_ready_all(target)
+    if not servers:
+        return 0
+    live = live_session_ids() if live is None else live
+    by_tail: dict[str, str] = {}
+    for p in (state_dir() / "book-tracks").glob("*.json"):
+        try:
+            data = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        folder = Path(str(data.get("folder") or ""))
+        if folder.name:
+            by_tail["/".join(folder.parts[-2:])] = str(data.get("session") or p.stem)
+    changed = 0
+    for url, token, libs in servers:
+        for lib in libs:
+            for item in _abs_items(url, token, lib["id"]):
+                tail = "/".join(str(item.get("path", "")).replace("\\", "/").split("/")[-2:])
+                session = by_tail.get(tail)
+                if not session:
+                    continue
+                have = list(((item.get("media") or {}).get("tags")) or [])
+                want = _tags_for(session, have, live)
+                if sorted(want) == sorted(have):
+                    continue
+                try:
+                    _abs_patch(url, token, f"/api/items/{item['id']}/media", {"tags": want})
+                    changed += 1
+                except Exception as e:  # noqa: BLE001
+                    log.warning("book-tracks: could not tag %s on %s (%s)", tail, url, e)
+    return changed
+
+
 def set_metadata(session: str, folder: Path, *, target=None) -> str:
     """Describe the item the way a library should. "" if nothing changed.
 
@@ -916,18 +1002,25 @@ def set_metadata(session: str, folder: Path, *, target=None) -> str:
         item = _find_item(url, token, libs, folder)
         if not item:
             continue
-        md = ((_abs_item(url, token, item["id"]) or {}).get("media") or {}).get("metadata") or {}
+        media = (_abs_item(url, token, item["id"]) or {}).get("media") or {}
+        md = media.get("metadata") or {}
         have_series = [(x.get("name"), str(x.get("sequence") or ""))
                        for x in (md.get("series") or [])]
         have_authors = [a.get("name") for a in (md.get("authors") or [])]
+        have_tags = list(media.get("tags") or [])
+        # **tags** — `live` while the session has a pane. Status, not
+        # membership: a closed session stays in its series.
+        tags = _tags_for(session, have_tags)
         if (md.get("title") == title
                 and have_series == [(workspace, sequence)]
-                and have_authors == [author]):
+                and have_authors == [author]
+                and sorted(tags) == sorted(have_tags)):
             described = True
             continue
         try:
             _abs_patch(url, token, f"/api/items/{item['id']}/media",
-                       {"metadata": {
+                       {"tags": tags,
+                        "metadata": {
                            "title": title,
                            # Arrays, not the seriesName/authorName fields: those
                            # are the read side of the same thing and a write to

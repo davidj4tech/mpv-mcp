@@ -32,6 +32,9 @@ Stdlib-only HTTP server. Endpoints:
                   session. 300 + candidates when a spoken name is ambiguous.
   GET  /conversations  + an Audiobookshelf bearer → live sessions and
                   recent conversations, by title (the picker)
+  POST /session/resume {"session"} → bring that session back in a tmux
+                  window (a reply's revive, without the reply)
+  POST /session/close  {"session"} → close the pane it runs in
   POST /focus     {"pane": "%23"} → bring the attached tmux client to a pane
   GET  /healthz   liveness
 
@@ -1643,6 +1646,16 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"ask: refused {status} ({detail.get('error')}) "
                       f"from {self.client_address[0]}", file=sys.stderr)
             self._json(200 if ok else status, {"ok": ok, **detail})
+        elif path in ("/session/resume", "/session/close"):
+            # Managing the session behind a conversation from the app: bring
+            # it back in a tmux window, or close the pane it runs in. Gated
+            # like /reply.
+            from . import reply as _reply
+            body = self._read_json() or {}
+            bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer").strip()
+            fn = _reply.session_resume if path.endswith("resume") else _reply.session_close
+            ok, detail = fn(str(body.get("session") or ""), bearer)
+            self._json(200 if ok else detail.pop("status", 400), {"ok": ok, **detail})
         elif path == "/focus":
             # The "opened in %23" link: pull the attached tmux client to a pane.
             from . import reply as _reply

@@ -1095,6 +1095,76 @@ def ask_routed(text: str, bearer: str, *, target: str = "", player_item: str = "
     return True, detail
 
 
+# --- managing the session behind a conversation ---------------------------------
+
+def _gate(bearer: str) -> tuple[dict | None, dict]:
+    user, status = abs_identity(bearer)
+    if not user:
+        return None, _identity_error(status)
+    ok, why = may_reply(user)
+    if not ok:
+        return None, {"error": why, "status": 403}
+    return user, {}
+
+
+def _retag(session: str) -> None:
+    """Reconcile the live tag now rather than at the next sweep."""
+    try:
+        from agent_media_core import book_tracks
+
+        threading.Thread(target=book_tracks.sync_live_tags, daemon=True).start()
+    except Exception:  # noqa: BLE001 — the sweep will get it
+        pass
+
+
+def session_resume(session: str, bearer: str) -> tuple[bool, dict]:
+    """Bring a conversation's session back in a tmux window, saying nothing.
+
+    What "resume" in the app does: the same revive a reply performs, without
+    a reply — the listener wants the terminal back, or wants the thread live
+    before speaking into it. Already live: says where it is.
+    """
+    session = (session or "").strip()
+    if not _UUID.fullmatch(session):
+        return False, {"error": "not a session id", "status": 400}
+    if not _gate(bearer)[0]:
+        return False, _gate(bearer)[1]
+    from . import canvas
+
+    pane = live_sessions().get(session, "")
+    if pane and canvas._pane_alive(pane):
+        return True, {"session": session, "pane": pane, "live": True, "opened": False}
+    if not session_exists(session):
+        return False, {"error": f"session {session[:8]} has no transcript to resume", "status": 404}
+    pane, err = open_window(session, transcript_cwd(session), resume=True)
+    if err:
+        return False, {"error": err, "pane": pane or None}
+    _retag(session)
+    return True, {"session": session, "pane": pane, "live": True, "opened": True}
+
+
+def session_close(session: str, bearer: str) -> tuple[bool, dict]:
+    """End a conversation's session: close the pane it runs in.
+
+    Only a pane that hosts this very session is touched — never a shell, and
+    never a pane that has since been recycled for something else. Claude Code
+    ends the session cleanly on the pane closing (SessionEnd fires), and the
+    transcript stays, so this is undone by `session_resume`.
+    """
+    session = (session or "").strip()
+    if not _UUID.fullmatch(session):
+        return False, {"error": "not a session id", "status": 400}
+    if not _gate(bearer)[0]:
+        return False, _gate(bearer)[1]
+    pane = live_sessions().get(session, "")
+    if not pane:
+        return True, {"session": session, "live": False, "closed": False}
+    if not _tmux(["kill-pane", "-t", pane]) and _tmux(["display", "-pt", pane, "#{pane_id}"]):
+        return False, {"error": f"could not close {pane}", "pane": pane}
+    _retag(session)
+    return True, {"session": session, "pane": pane, "live": False, "closed": True}
+
+
 # --- the whole move -----------------------------------------------------------
 
 # Quote and reply go in on ONE line. `send-keys` types literally and then

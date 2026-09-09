@@ -296,3 +296,53 @@ def test_conversation_log_ignores_a_live_turn_from_another_session(tmp_path, mon
                    "writer_pid": os.getpid()}})
     lines = bt.conversation_log("sess-1", folder)
     assert [l["text"] for l in lines] == ["Earlier"]
+
+
+
+# --- the live tag -----------------------------------------------------------------
+
+def test_tags_for_adds_and_removes_only_the_live_tag():
+    from agent_media_core import book_tracks as b
+    assert b._tags_for("s1", ["keep"], live={"s1"}) == ["keep", "live"]
+    assert b._tags_for("s1", ["keep", "live"], live=set()) == ["keep"]
+    assert b._tags_for("s1", ["live", "live"], live={"s1"}) == ["live"]
+
+
+def test_sync_live_tags_patches_only_what_changed(tmp_path, monkeypatch):
+    import json
+    from agent_media_core import book_tracks as b
+    from agent_media_core import _paths
+    monkeypatch.setattr(_paths, "state_dir", lambda: tmp_path)
+    monkeypatch.setattr(b, "state_dir", lambda: tmp_path)
+    d = tmp_path / "book-tracks"
+    d.mkdir()
+    (d / "s-live.json").write_text(json.dumps({"session": "s-live", "folder": "/c/p-x/Alive one"}))
+    (d / "s-dead.json").write_text(json.dumps({"session": "s-dead", "folder": "/c/p-x/Ended one"}))
+    (d / "s-same.json").write_text(json.dumps({"session": "s-same", "folder": "/c/p-x/Already right"}))
+    items = [
+        {"id": "i1", "path": "/conversations/p-x/Alive one", "media": {"tags": []}},
+        {"id": "i2", "path": "/conversations/p-x/Ended one", "media": {"tags": ["live", "other"]}},
+        {"id": "i3", "path": "/conversations/p-x/Already right", "media": {"tags": ["live"]}},
+        {"id": "i4", "path": "/conversations/p-x/Not ours", "media": {"tags": ["live"]}},
+    ]
+    monkeypatch.setattr(b, "_abs_ready_all", lambda target=None: [("http://abs", "tok", [{"id": "lib"}])])
+    monkeypatch.setattr(b, "_abs_items", lambda url, token, lib: items)
+    patched = []
+    monkeypatch.setattr(b, "_abs_patch", lambda url, token, path, body: patched.append((path, body)))
+    n = b.sync_live_tags(live={"s-live", "s-same"})
+    assert n == 2
+    assert patched == [("/api/items/i1/media", {"tags": ["live"]}),
+                       ("/api/items/i2/media", {"tags": ["other"]})]   # i3 right already, i4 not a conversation
+
+
+def test_live_session_ids_reads_the_registry_for_real(tmp_path, monkeypatch):
+    # Not mocked past the tmux call: the import it needs was once missing and
+    # every other test had stubbed the function away.
+    import os
+    from agent_media_core import book_tracks as b
+    monkeypatch.setenv("MEDIA_PANE_REGISTRY_DIR", str(tmp_path))
+    (tmp_path / "1").write_text("11111111-2222-3333-4444-555555555555")   # legacy row, no pid
+    (tmp_path / "2").write_text(f"22222222-2222-3333-4444-555555555555 {os.getpid()}")
+    (tmp_path / "3").write_text("33333333-2222-3333-4444-555555555555 999999999")  # dead pid
+    monkeypatch.setattr(b.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "%1 %2 %3"})())
+    assert b.live_session_ids() == {"11111111-2222-3333-4444-555555555555", "22222222-2222-3333-4444-555555555555"}
