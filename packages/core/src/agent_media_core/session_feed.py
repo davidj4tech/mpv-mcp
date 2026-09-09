@@ -89,6 +89,11 @@ class Turn:
     #: The reply's dedup key, when the row recorded one. It is what the visual
     #: channel remembers its pushes by, so it is how a turn finds its picture.
     key: str = ""
+    #: A multiple-choice question, when this turn was one:
+    #: `[{question, options: [{label, description}], multiSelect}]`. The words
+    #: were spoken with a location label and the options run together, so a
+    #: reader wants the structure rather than the sentence.
+    ask: list = field(default_factory=list)
 
     @property
     def title(self) -> str:
@@ -108,7 +113,10 @@ def turns(session: str, *, store=None) -> list[Turn]:
 
     - **alerts** (`extras.kind == "notif"`) — "Claude is waiting" is not part
       of the conversation, and the popup's own traversal excludes them for the
-      same reason;
+      same reason. A *question* is the exception: it rides the same alert lane
+      (it is spoken by the PreToolUse hook, not by a reply) but it is the
+      assistant's own turn and the answer that follows makes no sense without
+      it, so a row carrying `extras.ask` stays;
     - **rows with no audio** — a `silenced:` row records that something was
       *not* said aloud, and there is nothing to concatenate;
     - **clips the cache has swept** — the row outlives the file (that is the
@@ -127,7 +135,7 @@ def turns(session: str, *, store=None) -> list[Turn]:
         ex = row.get("extras")
         if not isinstance(ex, dict) or ex.get("source_session") != session:
             continue
-        if ex.get("kind") == "notif":
+        if ex.get("kind") == "notif" and not ex.get("ask"):
             continue
         uris = ex.get("clip_uris") or ([row["uri"]] if row.get("uri") else [])
         durs = list(ex.get("clip_durations_s") or [])
@@ -151,6 +159,7 @@ def turns(session: str, *, store=None) -> list[Turn]:
                         sentences=(lines if any(lines) else []),
                         listener=bool(ex.get("listener")),
                         key=str(ex.get("dedup_key") or ""),
+                        ask=(ex.get("ask") if isinstance(ex.get("ask"), list) else []),
                         workspace=(ex.get("source_tmux_session") or "").strip()))
     out.sort(key=lambda t: t.at)
     return out

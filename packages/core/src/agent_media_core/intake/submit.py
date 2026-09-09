@@ -3277,6 +3277,11 @@ def submit_event(event: Event,
                 # the ▣ indicator in the status bar / popup / canvas badge.
                 if event.metadata.get("visual"):
                     extras["visual"] = event.metadata["visual"]
+                # A multiple-choice question: the row is on the alert lane but
+                # is a real turn, and a reader wants the options as options
+                # rather than the run-together sentence the voice was given.
+                if event.metadata.get("ask"):
+                    extras["ask"] = event.metadata["ask"]
                 if live is not None:
                     # Mirror the *remote* player's live state into now_playing so a
                     # status read (popup redraw) is a local DB hit, not a ~600ms

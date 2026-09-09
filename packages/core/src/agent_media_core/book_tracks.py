@@ -671,7 +671,11 @@ def _live_turn(session: str) -> Optional[dict]:
             ex = {}
     if not isinstance(ex, dict):
         return None
-    if ex.get("source_session") != session or ex.get("kind") == "notif":
+    if ex.get("source_session") != session:
+        return None
+    # A question is spoken on the alert lane but belongs to the conversation —
+    # same exception session_feed.turns makes, for the same reason.
+    if ex.get("kind") == "notif" and not ex.get("ask"):
         return None
     wp = ex.get("writer_pid")
     if wp:
@@ -758,7 +762,7 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
             except Exception as e:  # noqa: BLE001 — a log without times still reads
                 log.warning("book-tracks: no track offsets for the log (%s)", e)
 
-    def _line(who_listener, text, pos, at=None, key=""):
+    def _line(who_listener, text, pos, at=None, key="", ask=None):
         text = (text or "").strip()
         who = "you" if who_listener else "agent"
         if who == "you" and text.startswith("You: "):
@@ -767,8 +771,18 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
             text = text[len("You: "):]
         # `at` and `key` name the turn for anything that wants to hang more on
         # it — the canvas attaches the picture drawn for a reply by its key.
-        return {"start": pos.get("start"), "end": pos.get("end"),
+        line = {"start": pos.get("start"), "end": pos.get("end"),
                 "who": who, "text": text, "at": at, "key": key or ""}
+        if ask:
+            # The spoken sentence is "host / pane: Question. Option 1: …" —
+            # right for a voice, wrong for a bubble. Hand over the structure
+            # and let the reader lay it out; `text` becomes the question alone
+            # so a client that knows nothing of `ask` still reads sensibly.
+            line["ask"] = ask
+            asked = " ".join(str(q.get("question") or "").strip() for q in ask).strip()
+            if asked:
+                line["text"] = asked
+        return line
 
     out = []
     seen = set()
@@ -779,7 +793,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
         pos = positions[n] if n < len(positions) else {}
         out.append(_line(spoken and spoken.listener,
                          spoken.text if spoken else turn.get("title"), pos,
-                         at, spoken.key if spoken else ""))
+                         at, spoken.key if spoken else "",
+                         ask=(spoken.ask if spoken else None)))
 
     # The live tail: turns in speech history the manifest has not caught up to
     # yet. Shown at once, with no position — the audio item does not place them
@@ -788,7 +803,8 @@ def conversation_log(session: str, folder: Path, *, target=None) -> list:
     # a poll of being spoken instead of waiting out the publish cycle.
     for at in sorted(a for a in said if a not in seen):
         seen.add(at)
-        out.append(_line(said[at].listener, said[at].text, {}, at, said[at].key))
+        out.append(_line(said[at].listener, said[at].text, {}, at,
+                         said[at].key, ask=said[at].ask))
 
     # The turn speaking right now, if it has not already landed as an ended
     # row above. This is what puts a reply on screen *while* it is being

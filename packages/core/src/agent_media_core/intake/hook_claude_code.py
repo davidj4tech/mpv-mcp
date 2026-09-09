@@ -53,6 +53,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path  # still used by _stamp_dir, _latest_assistant_text
@@ -586,7 +587,31 @@ def _dedup_seen(state: StateStore, text: str, ttl_seconds: int = 300) -> bool:
     return False
 
 
-def _emit_ask(ask: str, payload: dict, lead: str = "") -> int:
+def ask_structure(tool_input: dict) -> list:
+    """An AskUserQuestion tool input as data: what was asked, and the choices.
+
+    The spoken form runs the options into one sentence because a voice has no
+    other way to offer them. A transcript does, and an answer with no question
+    above it reads as a non-sequitur — so the same input is kept as structure
+    and rendered as a list wherever there is a screen.
+    """
+    out = []
+    for q in tool_input.get("questions") or []:
+        text = (q.get("question") or "").strip()
+        if not text:
+            continue
+        options = []
+        for o in q.get("options") or []:
+            label = (o.get("label") or "").strip()
+            if label:
+                options.append({"label": label,
+                                "description": (o.get("description") or "").strip()})
+        out.append({"question": text, "options": options,
+                    "multiSelect": bool(q.get("multiSelect"))})
+    return out
+
+
+def _emit_ask(ask: str, payload: dict, lead: str = "", structure: list | None = None) -> int:
     """Speak a synthesized AskUserQuestion (question + option labels).
 
     Prefixes the hierarchical host/session/pane label, bypasses focus-
@@ -621,7 +646,7 @@ def _emit_ask(ask: str, payload: dict, lead: str = "") -> int:
     submit_event(Event(text=msg, source=Source.CLAUDE_CODE,
                        priority=priority,
                        voice=_voice_for_session(sess),
-                       metadata={"kind": "notif", "ask": True,
+                       metadata={"kind": "notif", "ask": structure or True,
                                  "session": payload.get("session_id") or "",
                                  **_source_place()}),
                  state=state)
@@ -667,7 +692,8 @@ def _handle_pretooluse(payload: dict) -> int:
         tp = Path(tp_raw)
         if tp.is_file():
             lead = strip_markdown(_ask_lead_text(tp)).strip()
-    return _emit_ask(ask, payload, lead=lead)
+    return _emit_ask(ask, payload, lead=lead,
+                     structure=ask_structure(payload.get("tool_input") or {}))
 
 
 def _handle_notification(payload: dict) -> int:
@@ -989,6 +1015,85 @@ def _handle_stop(payload: dict) -> int:
 # transcript line reads as a bug, a missing one reads as a paste.
 PROMPT_RECORD_LIMIT = 2000
 
+#: Blocks the harness writes into a user prompt that the listener never said:
+#: a finished background task, a system reminder, the echo of a slash command.
+#: They arrived in the transcript as listener turns and were read aloud — one
+#: task notification rendered 230KB of somebody spelling out a tool-use id.
+_SYSTEM_BLOCKS = re.compile(
+    r"<(task-notification|system-reminder|local-command-caveat|local-command-stdout"
+    r"|command-name|command-message|command-args)\b.*?</\1>",
+    re.DOTALL | re.IGNORECASE)
+_SYSTEM_BANNER = re.compile(
+    r"\[SYSTEM NOTIFICATION - NOT USER INPUT\].*?(?=\n\s*\n|\Z)",
+    re.DOTALL | re.IGNORECASE)
+
+
+def strip_system_blocks(text: str) -> str:
+    """The listener's own words, with the harness's asides removed.
+
+    Stripped rather than skipped: a real message often arrives with a system
+    block stapled to it (a slash command's output, then what the person
+    actually typed), and dropping the whole prompt would lose the sentence
+    that matters. Nothing left over means nothing was said.
+    """
+    out = _SYSTEM_BANNER.sub(" ", _SYSTEM_BLOCKS.sub(" ", text or ""))
+    # An unterminated block (the harness truncates long ones) leaves a bare
+    # opening tag and everything after it; there is no listener text in that.
+    out = re.split(r"<(?:task-notification|system-reminder|local-command-caveat)\b",
+                   out, maxsplit=1)[0]
+    return " ".join(out.split())
+
+
+def answers_from_response(response) -> str:
+    """What the listener chose, as a sentence, or "".
+
+    The tool result has been a dict of question->answer and a plain summary
+    string at different times, so both are read and neither is required. The
+    labels are the words the person picked; the question is already its own
+    turn above, so only the answers are recorded here.
+    """
+    if isinstance(response, str):
+        picked = re.findall(r'"[^"]*"\s*=\s*"([^"]*)"', response)
+        return ", ".join(p.strip() for p in picked if p.strip())
+    if not isinstance(response, dict):
+        return ""
+    answers = response.get("answers")
+    picked: list[str] = []
+    if isinstance(answers, dict):
+        picked = [str(v).strip() for v in answers.values() if str(v).strip()]
+    elif isinstance(answers, list):
+        for a in answers:
+            if isinstance(a, dict):
+                v = a.get("answer") or a.get("label") or ""
+            else:
+                v = a
+            if str(v).strip():
+                picked.append(str(v).strip())
+    if picked:
+        return ", ".join(picked)
+    for key in ("content", "text", "result"):
+        if isinstance(response.get(key), str):
+            return answers_from_response(response[key])
+    return ""
+
+
+def _handle_posttooluse(payload: dict) -> int:
+    """PostToolUse(AskUserQuestion) — record the option the listener chose.
+
+    An answer is a turn: it is what the person said, and without it the
+    transcript jumps from a question to a reply that acts on an instruction
+    nobody can see. It goes down the same path as a typed prompt, so it is
+    rendered in the listener's voice and lands in the conversation exactly
+    like one.
+    """
+    if payload.get("tool_name") != "AskUserQuestion":
+        return 0
+    text = answers_from_response(payload.get("tool_response"))
+    session = payload.get("session_id") or ""
+    if not text or not session:
+        return 0
+    return _record_listener_text(session, text)
+
 
 def _handle_user_prompt(payload: dict) -> int:
     """UserPromptSubmit — the listener's own words, typed at the keyboard.
@@ -1000,10 +1105,12 @@ def _handle_user_prompt(payload: dict) -> int:
     the listener's voice, one history row, the shelf publish armed — so the
     transcript reads the same whichever way the words arrived.
 
-    Detached like playback: the render takes a second or two and must not sit
-    in front of the prompt, and the hook is killed at its timeout.
+    Not everything arriving here was said by anyone: the harness staples task
+    notifications and system reminders into the prompt stream, and those were
+    being read aloud and shelved as the listener's turns. `strip_system_blocks`
+    takes them out and keeps whatever the person actually typed.
     """
-    text = " ".join(str(payload.get("prompt") or "").split())
+    text = strip_system_blocks(str(payload.get("prompt") or ""))
     session = payload.get("session_id") or ""
     if not text or not session:
         return 0
@@ -1013,6 +1120,15 @@ def _handle_user_prompt(payload: dict) -> int:
     if len(text) > PROMPT_RECORD_LIMIT:
         log.info("hook: prompt of %d chars not recorded (paste)", len(text))
         return 0
+    return _record_listener_text(session, text)
+
+
+def _record_listener_text(session: str, text: str) -> int:
+    """Add `text` to the conversation as a listener turn, off the hook's clock.
+
+    Detached like playback: the render takes a second or two and must not sit
+    in front of the prompt, and the hook is killed at its timeout.
+    """
 
     def record() -> None:
         try:
@@ -1072,6 +1188,8 @@ def main() -> int:
     try:
         if event_name == "PreToolUse":
             return _handle_pretooluse(payload)
+        if event_name == "PostToolUse":
+            return _handle_posttooluse(payload)
         if event_name == "Notification":
             return _handle_notification(payload)
         if event_name == "Stop":
