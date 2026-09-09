@@ -2,8 +2,8 @@
 
 Headless Playwright verification of the canvas *client* JS — the parts pytest
 can't reach: SSE watchdog/self-heal (#137), the room-legible disconnect banner
-(#142), e-ink toast legibility (#146), and the fullscreen button (T17).
-12 checks, ~4 minutes, screenshots for eyeballing.
+(#142), e-ink toast legibility (#146), and the fullscreen button with its landscape
+lock (T17). 14 checks, ~4 minutes, screenshots for eyeballing.
 
 The page is a picture with a caption: the controls, the agent tree, the whole
 reply and the reply box moved to Sasonica, and their checks (T3–T9, T13, T16)

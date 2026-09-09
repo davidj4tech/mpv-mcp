@@ -116,6 +116,18 @@ function stall(on) {
       return es;
     };
     window.EventSource.prototype = Orig.prototype;
+    // Watch the orientation lock without replacing it: the real call still
+    // runs (and, on a desktop chromium, still refuses), which is exactly the
+    // case T17d is about — a refused rotation must not cost the fullscreen.
+    window.__orient = { lock: [], unlock: 0, rejected: 0 };
+    try {
+      const o = screen.orientation, ol = o.lock.bind(o), ou = o.unlock.bind(o);
+      o.lock = (kind) => {
+        window.__orient.lock.push(kind);
+        return ol(kind).catch((e) => { window.__orient.rejected++; throw e; });
+      };
+      o.unlock = () => { window.__orient.unlock++; return ou(); };
+    } catch (_) {}
   });
 
   // The page no longer posts /input or /ctl — replying and playback control
@@ -286,6 +298,31 @@ function stall(on) {
     rec('T17c it takes the document in and back out',
       inFs.fs && inFs.body && inFs.icon !== 'none' && !inFs.toast && !out.fs && !out.body,
       JSON.stringify({ inFs, out }));
+
+    // The pictures are wide, so fullscreen asks for landscape on the way in
+    // and hands the rotation back on the way out. A desktop chromium refuses
+    // the lock — the point of checking here is that the refusal cost nothing:
+    // T17c above ran on the very fullscreen this rejection happened inside.
+    const orient = await page.evaluate(() => window.__orient);
+    rec('T17d fullscreen asks for landscape; a refusal costs it nothing',
+      orient.lock.length >= 1 && orient.lock.every(k => k === 'landscape') &&
+      orient.unlock >= 1 && inFs.fs,
+      JSON.stringify(orient));
+
+    // ...but not on e-ink. Rotating the whole screen is the largest movement
+    // there is, and this page's whole e-ink posture is that DU4 must not move.
+    // Fullscreen itself still works there — only the rotation is withheld.
+    await page.goto(`http://127.0.0.1:${PROXY_PORT}/?eink=1`, { waitUntil: 'domcontentloaded' });
+    await sleep(800);
+    await page.click('#full'); await sleep(600);
+    const ink = await page.evaluate(() => ({
+      eink: document.documentElement.classList.contains('eink'),
+      fs: !!document.fullscreenElement,
+      locks: window.__orient.lock.length }));
+    await page.evaluate(() => document.exitFullscreen()).catch(() => {});
+    await page.evaluate(() => localStorage.setItem('eink', '0'));
+    rec('T17e e-ink goes fullscreen without rotating',
+      ink.eink && ink.fs && ink.locks === 0, JSON.stringify(ink));
   }
 
   await browser.close();

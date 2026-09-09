@@ -685,6 +685,34 @@
     clearTimeout(fullTimer);
     fullTimer = setTimeout(() => b.classList.remove('on'), 4000);
   }
+  // Landscape, while we are in there. The pictures are wide — figures are drawn
+  // to a 16:9-ish box and the ambient art is a photograph — so on a phone held
+  // upright a fitted image is a band across the middle with most of the screen
+  // left over. Filling the screen is the whole point of the button, and half of
+  // filling it is turning it the right way up.
+  //
+  // Only inside fullscreen: the Screen Orientation API refuses a lock outside
+  // it, which is also why this hangs off the fullscreen state rather than
+  // being its own control. A desktop browser refuses it outright and that is
+  // fine — the window was already landscape and fullscreen worked; a refused
+  // rotation must never read as a failed fullscreen.
+  //
+  // e-ink is the exception. Every other decision on this page treats DU4 as a
+  // page that must not move — no crossfades, no pan, no video, no fades on the
+  // button itself — and rotating the entire screen is the largest movement
+  // there is. The Pine Note is held the way it is held.
+  function lockLandscape() {
+    if (einkOn()) return;
+    const o = screen.orientation;
+    if (!o || !o.lock) return;
+    try { const r = o.lock('landscape'); if (r && r.catch) r.catch(() => {}); }
+    catch (_) {}
+  }
+  function unlockOrientation() {
+    const o = screen.orientation;
+    if (!o || !o.unlock) return;
+    try { o.unlock(); } catch (_) {}
+  }
   function drawFull() {
     const b = $('full');
     if (!b) return;
@@ -692,6 +720,11 @@
     document.body.classList.toggle('fullscreen', on);
     b.title = on ? 'Leave fullscreen' : 'Fullscreen';
     b.setAttribute('aria-label', b.title);
+    // Driven off the STATE, not off the button, so that Esc — which leaves
+    // fullscreen without ever going through toggleFull — puts the rotation
+    // back too. A screen left locked landscape by a keypress the page never
+    // saw is a phone that has mysteriously stopped turning.
+    on ? lockLandscape() : unlockOrientation();
     revealFull();                  // say so: the icon just changed under a thumb
   }
   async function toggleFull() {
