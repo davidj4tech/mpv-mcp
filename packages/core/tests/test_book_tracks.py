@@ -346,3 +346,20 @@ def test_live_session_ids_reads_the_registry_for_real(tmp_path, monkeypatch):
     (tmp_path / "3").write_text("33333333-2222-3333-4444-555555555555 999999999")  # dead pid
     monkeypatch.setattr(b.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "%1 %2 %3"})())
     assert b.live_session_ids() == {"11111111-2222-3333-4444-555555555555", "22222222-2222-3333-4444-555555555555"}
+
+
+def test_live_turn_carries_the_playout_delay_for_its_target(monkeypatch):
+    import json, time
+    from agent_media_core import book_tracks as b
+    ex = {"source_session": "s1", "text": "One. Two.", "clip_sentences": ["One.", "Two."],
+          "clip_offsets_s": [0.0, 1.5], "play_started_at": time.time() - 1.0}
+    row = {"started_at": 100.0, "target": "phone", "extras": json.dumps(ex)}
+
+    class Store:
+        def get_now_playing(self, sink):
+            return row
+
+    monkeypatch.setattr("agent_media_core.state.store.StateStore", lambda: Store())
+    monkeypatch.setenv("MEDIA_SPEECH_PLAYOUT_MS_PHONE", "1200")
+    turn = b._live_turn("s1")
+    assert turn["delay"] == 1.2 and turn["offsets"] == [0.0, 1.5] and 0.9 < turn["elapsed"] < 1.3

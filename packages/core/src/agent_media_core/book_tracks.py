@@ -714,11 +714,23 @@ def _live_turn(session: str) -> Optional[dict]:
     base = float(ex.get("play_started_at") or at)
     paused_at = ex.get("paused_at")
     now = float(paused_at) if paused_at else time.time()
+    # How long after the clock starts the audio is actually heard — the bridge
+    # hop, the far player's start, a Snapcast buffer. The terminal highlight
+    # waits this long before moving (`_HighlightScheduler`); a reader that
+    # does not is that far ahead of the voice, which is exactly how the app's
+    # bold read: a sentence early.
+    try:
+        from .intake.submit import _playout_delay_s
+
+        delay = _playout_delay_s(str(np.get("target") or ""))
+    except Exception:  # noqa: BLE001 — a beat off beats no highlight
+        delay = 0.0
     return {"at": round(float(at), 3), "text": text,
             "listener": bool(ex.get("listener")),
             "sentences": [str(x) for x in (ex.get("clip_sentences") or [])],
             "sentence": sentence, "offsets": offsets,
             "elapsed": round(max(0.0, now - base), 3),
+            "delay": round(delay, 3),
             "paused": bool(paused_at)}
 
 
