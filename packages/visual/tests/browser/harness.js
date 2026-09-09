@@ -7,7 +7,7 @@
 // The page is a picture with a caption now — the controls, the agent tree, the
 // transcript and the reply box moved to Sasonica — so what is left to verify is
 // the connection and the theme: the SSE stream and its self-heal, the server's
-// load shedding, and e-ink legibility.
+// load shedding, e-ink legibility, and the one button the page kept.
 //
 // Point MEDIA_HARNESS_SRC at a worktree's packages/visual/src to test a branch
 // without reinstalling; defaults to this repo's source tree.
@@ -246,6 +246,46 @@ function stall(on) {
     const toastSolid = ts.bg === 'rgb(255, 255, 255)' && ts.color === 'rgb(0, 0, 0)' &&
       ts.bw === '2px' && ts.blur === 'none' && ts.shadow === 'none';
     rec('T15 e-ink toast is solid + legible', toastSolid, JSON.stringify(ts));
+  }
+
+  // ---- T17: the fullscreen button ------------------------------------------
+  // The page's one control. It rests invisible (and untappable with it, so a
+  // corner of the picture does not quietly stop being the picture), appears on
+  // any sign of a person, and actually takes the document in and out.
+  {
+    await page.evaluate(() => localStorage.setItem('eink', '0'));
+    await page.goto(`http://127.0.0.1:${PROXY_PORT}/`, { waitUntil: 'domcontentloaded' });
+    await sleep(800);
+    const cls = () => page.evaluate(() => {
+      const b = document.getElementById('full');
+      return b ? { on: b.classList.contains('on'),
+                   pe: getComputedStyle(b).pointerEvents } : null;
+    });
+    const shown = await cls();
+    await sleep(4500);                       // the reveal is a four-second fade
+    const faded = await cls();
+    rec('T17a button shows once, then rests invisible + untappable',
+      !!shown && shown.on && !!faded && !faded.on && faded.pe === 'none',
+      JSON.stringify({ shown, faded }));
+
+    await page.mouse.click(640, 300); await sleep(300);   // bare canvas
+    const woken = await cls();
+    rec('T17b a tap on the picture reveals it', !!woken && woken.on, JSON.stringify(woken));
+
+    await page.click('#full'); await sleep(600);
+    const inFs = await page.evaluate(() => ({
+      fs: !!document.fullscreenElement,
+      body: document.body.classList.contains('fullscreen'),
+      icon: getComputedStyle(document.querySelector('#full .fs-out')).display,
+      toast: document.getElementById('toast').textContent }));
+    await page.screenshot({ path: SHOTS + '/09-fullscreen.png' });
+    await page.click('#full'); await sleep(600);
+    const out = await page.evaluate(() => ({
+      fs: !!document.fullscreenElement,
+      body: document.body.classList.contains('fullscreen') }));
+    rec('T17c it takes the document in and back out',
+      inFs.fs && inFs.body && inFs.icon !== 'none' && !inFs.toast && !out.fs && !out.body,
+      JSON.stringify({ inFs, out }));
   }
 
   await browser.close();

@@ -2,13 +2,14 @@
 
 Headless Playwright verification of the canvas *client* JS — the parts pytest
 can't reach: SSE watchdog/self-heal (#137), the room-legible disconnect banner
-(#142), and e-ink toast legibility (#146). 9 checks, ~4 minutes, screenshots
-for eyeballing.
+(#142), e-ink toast legibility (#146), and the fullscreen button (T17).
+12 checks, ~4 minutes, screenshots for eyeballing.
 
 The page is a picture with a caption: the controls, the agent tree, the whole
 reply and the reply box moved to Sasonica, and their checks (T3–T9, T13, T16)
 went with them, along with `tx-harness.js`, `band-harness.js` and
-`probe-live.js`. What is left to verify is the connection and the theme.
+`probe-live.js`. What is left to verify is the connection, the theme, and the
+one control the page kept.
 
 It spins up a **throwaway** canvas on `127.0.0.1:8791` (env
 `MEDIA_VISUAL_TRUST_TAILNET=1`, video poller off) behind a stallable TCP proxy

@@ -137,6 +137,31 @@
     opacity: 0; transition: opacity .8s ease; pointer-events: none;
   }
   #fig.on { opacity: 1; }
+  /* Fullscreen button: top-right, the one corner nothing else claims (#fig is
+     top-left, #toast top-centre, #dot bottom-right). Invisible at rest, and
+     while it is invisible it takes no taps either — otherwise a corner of the
+     picture would silently stop being the picture. */
+  #full {
+    position: fixed; top: max(10px, env(safe-area-inset-top)); right: 12px;
+    width: 44px; height: 44px; z-index: 35;   /* under #toast, over the picture */
+    display: grid; place-items: center; padding: 0; cursor: pointer;
+    border: 0; border-radius: 12px; color: #eee;
+    background: rgba(10,10,10,.55); backdrop-filter: blur(10px);
+    opacity: 0; pointer-events: none; transition: opacity .35s ease;
+  }
+  #full.on { opacity: .85; pointer-events: auto; }
+  #full:hover, #full:focus-visible { opacity: 1; }
+  #full:active { background: rgba(255,255,255,.16); }
+  /* One icon, two states: brackets pointing out to go in, in to come back. */
+  #full .fs-out, body.fullscreen #full .fs-in { display: none; }
+  body.fullscreen #full .fs-out { display: inline; }
+  /* DU4 has four greys and no patience for a fade: a .35s opacity ramp is a
+     smear that stays on the page. Appear and vanish outright, fully opaque. */
+  html.eink #full {
+    background: #fff; color: #000; border: 1.5px solid #000;
+    backdrop-filter: none; transition: none;
+  }
+  html.eink #full.on { opacity: 1; }
   /* While the voice is talking the scene breathes: a soft vignette swells in
      time-ish with speech (the Ken Burns pan also speeds up, via JS). */
   #pulse {

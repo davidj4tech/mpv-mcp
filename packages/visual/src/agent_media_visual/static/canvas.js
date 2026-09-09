@@ -299,10 +299,15 @@
   }
   addEventListener('pointerup', pinchEnd, { passive: true });
   addEventListener('pointercancel', pinchEnd, { passive: true });
+  // Everything on this page is the picture except one 44px button, and a
+  // press that starts on it is the button's: without this it also pans the
+  // image and counts toward the double-tap reset.
+  const onPicture = (t) => !(t && t.closest && t.closest('#full'));
   // One finger pans too, but only once zoomed.
   let panFrom = null;
   addEventListener('pointerdown', (e) => {
-    if (imgZ > 1 && PINCH.pts.size <= 1) panFrom = { x: e.clientX, y: e.clientY };
+    if (imgZ > 1 && PINCH.pts.size <= 1 && onPicture(e.target))
+      panFrom = { x: e.clientX, y: e.clientY };
   }, { passive: true });
   addEventListener('pointermove', (e) => {
     if (!panFrom || PINCH.pts.size >= 2) return;
@@ -325,7 +330,7 @@
   let lastTap = 0, tapOk = false, tapAt = null;
   addEventListener('pointerdown', (e) => {
     if (PINCH.pts.size > 1) { tapOk = false; return; }   // a second finger: not a tap
-    tapOk = true;
+    tapOk = onPicture(e.target);
     tapAt = { x: e.clientX, y: e.clientY };
   }, { passive: true });
   addEventListener('pointermove', (e) => {
@@ -646,6 +651,68 @@
     t.classList.add('on');
     clearTimeout(toastT);
     toastT = setTimeout(() => t.classList.remove('on'), 2600);
+  }
+
+  // ---- fullscreen ----------------------------------------------------------
+  // A wall is a browser tab, and a tab has chrome around it. There is no F11
+  // on a screen with no keyboard, so this is the way — the only control the
+  // page kept, because it is the only one that is about the screen rather than
+  // about the audio the screen is illustrating.
+  const FS_ROOT = document.documentElement;
+  const fsReq = FS_ROOT.requestFullscreen || FS_ROOT.webkitRequestFullscreen;
+  const fsExit = document.exitFullscreen || document.webkitExitFullscreen;
+  function fsOn() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+  // An iframe without allowfullscreen reports fullscreenEnabled false, and a
+  // button that cannot work is worse than no button: take it off the page
+  // rather than leave a dead corner for somebody to keep pressing.
+  if (!fsReq || document.fullscreenEnabled === false) $('full').remove();
+
+  // Invisible at rest, revealed by any sign of a person, gone again a few
+  // seconds later. The reveal is what makes an always-there button acceptable
+  // on a picture: it is there when you are looking for it and not otherwise.
+  let fullTimer = null, fullShownAt = 0;
+  function revealFull() {
+    const b = $('full');
+    if (!b) return;
+    // mousemove fires at pointer rate; re-arming a timeout on every one of
+    // them is a lot of churn for a four-second fade. Once a frame is plenty.
+    const now = Date.now();
+    if (b.classList.contains('on') && now - fullShownAt < 200) return;
+    fullShownAt = now;
+    b.classList.add('on');
+    clearTimeout(fullTimer);
+    fullTimer = setTimeout(() => b.classList.remove('on'), 4000);
+  }
+  function drawFull() {
+    const b = $('full');
+    if (!b) return;
+    const on = fsOn();
+    document.body.classList.toggle('fullscreen', on);
+    b.title = on ? 'Leave fullscreen' : 'Fullscreen';
+    b.setAttribute('aria-label', b.title);
+    revealFull();                  // say so: the icon just changed under a thumb
+  }
+  async function toggleFull() {
+    const want = !fsOn();
+    try {
+      if (want) await fsReq.call(FS_ROOT);
+      else if (fsExit) await fsExit.call(document);
+    } catch (_) {}
+    // Android's WebView has the API and no fullscreen behind it — it resolves
+    // and nothing happens — so believe the document, not the promise. (There
+    // the canvas is already drawn to every edge, which is why nobody noticed.)
+    if (want && !fsOn()) toast('this screen has no fullscreen to give');
+    drawFull();
+  }
+  if ($('full')) {
+    $('full').addEventListener('click', (e) => { e.stopPropagation(); toggleFull(); });
+    for (const ev of ['fullscreenchange', 'webkitfullscreenchange'])
+      document.addEventListener(ev, drawFull);
+    for (const ev of ['pointerdown', 'mousemove', 'keydown'])
+      document.addEventListener(ev, revealFull, { passive: true });
+    revealFull();                  // a fresh page shows its one control once
   }
 
   // ---- the two keys left ---------------------------------------------------

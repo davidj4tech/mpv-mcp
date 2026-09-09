@@ -24,6 +24,20 @@
      whole reply, replying to it and driving the session are Sasonica's. -->
 <div id="sub"></div>
 <div id="fig">▣ figure</div>
+<!-- Fullscreen. The wall is a browser tab like any other, and a tab has chrome
+     around it; on a screen with no keyboard there is otherwise no way to be rid
+     of it. It rests invisible and appears on a touch or a mouse move, then
+     fades — a button drawn permanently over a picture is a picture with a
+     button on it. The JS removes it outright where the browser has no
+     fullscreen to give, rather than leaving one that does nothing. -->
+<button id="full" type="button" title="Fullscreen" aria-label="Fullscreen">
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"
+       fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+    <path class="fs-in"  d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>
+    <path class="fs-out" d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5"/>
+  </svg>
+</button>
 <div id="dot" title="disconnected"></div>
 <div id="offbar"><div class="msg">reconnecting…</div></div>
 <div id="toast"></div>
