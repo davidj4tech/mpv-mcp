@@ -675,7 +675,7 @@ def _live_turn(session: str) -> Optional[dict]:
         return None
     # A question is spoken on the alert lane but belongs to the conversation —
     # same exception session_feed.turns makes, for the same reason.
-    if ex.get("kind") == "notif" and not ex.get("ask"):
+    if ex.get("kind") == "notif" and not isinstance(ex.get("ask"), list):
         return None
     wp = ex.get("writer_pid")
     if wp:

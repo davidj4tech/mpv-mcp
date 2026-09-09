@@ -135,7 +135,11 @@ def turns(session: str, *, store=None) -> list[Turn]:
         ex = row.get("extras")
         if not isinstance(ex, dict) or ex.get("source_session") != session:
             continue
-        if ex.get("kind") == "notif" and not ex.get("ask"):
+        # `ask` was a bare True before the question kept its options, and a
+        # row from then has no structure to show and an audio clip the shelf
+        # never placed — letting those in appends a months-old question to the
+        # end of an item. Only a structured one is a turn.
+        if ex.get("kind") == "notif" and not isinstance(ex.get("ask"), list):
             continue
         uris = ex.get("clip_uris") or ([row["uri"]] if row.get("uri") else [])
         durs = list(ex.get("clip_durations_s") or [])

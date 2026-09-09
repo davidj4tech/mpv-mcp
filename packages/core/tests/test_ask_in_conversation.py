@@ -80,3 +80,15 @@ def test_the_harnesss_own_asides_are_not_shown_as_listener_turns(monkeypatch):
     lines = book_tracks.conversation_log("s1", __import__("pathlib").Path("/tmp/x"))
     assert [l["text"] for l in lines] == ["why are these repeating?",
                                           "Because a test left one playing."]
+
+
+def test_a_question_from_before_the_options_were_kept_stays_out(tmp_path, monkeypatch):
+    """`ask` was a bare True then. Such a row has no options to lay out and an
+    unplaced clip, so admitting it appends an old question to the end of an
+    item rather than putting it back where it was asked."""
+    clip = tmp_path / "c.mp3"; clip.write_bytes(b"x")
+    rows = [_row(1.0, "host / pane: Which case? Option 1: A.",
+                 {"source_session": "s1", "kind": "notif", "ask": True,
+                  "clip_uris": [str(clip)]})]
+    monkeypatch.setattr(session_feed, "_ffprobe_duration", lambda p: 1.0, raising=False)
+    assert session_feed.turns("s1", store=_Store(rows)) == []
