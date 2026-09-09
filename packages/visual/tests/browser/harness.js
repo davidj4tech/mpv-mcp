@@ -1,8 +1,13 @@
-// Headless verification harness for the canvas client JS (#137 #141 #142 #146).
+// Headless verification harness for the canvas client JS (#137 #142 #146).
 // Runs a throwaway canvas instance on 127.0.0.1, fronts it with a stallable TCP
 // proxy (the only way to reproduce a *silently* stalled SSE stream), and drives
 // the real client JS with Playwright chromium. Never touches the live wall
 // service. See README.md in this directory for setup and safety notes.
+//
+// The page is a picture with a caption now — the controls, the agent tree, the
+// transcript and the reply box moved to Sasonica — so what is left to verify is
+// the connection and the theme: the SSE stream and its self-heal, the server's
+// load shedding, and e-ink legibility.
 //
 // Point MEDIA_HARNESS_SRC at a worktree's packages/visual/src to test a branch
 // without reinstalling; defaults to this repo's source tree.
@@ -99,7 +104,7 @@ function stall(on) {
 
   // Instrument EventSource + native prompt before any page JS runs.
   await page.addInitScript(() => {
-    window.__esCount = 0; window.__pings = 0; window.__msgs = 0; window.__promptCalled = 0;
+    window.__esCount = 0; window.__pings = 0; window.__msgs = 0;
     const Orig = window.EventSource;
     window.EventSource = function (url, opts) {
       window.__esCount++;
@@ -111,36 +116,15 @@ function stall(on) {
       return es;
     };
     window.EventSource.prototype = Orig.prototype;
-    window.prompt = () => { window.__promptCalled++; return null; };
   });
 
-  // Intercept /input: never let keystrokes reach real tmux panes.
-  let inputMode = 'block';
-  const inputReqs = [];
-  await page.route('**/input', (route) => {
-    inputReqs.push({ headers: route.request().headers(), post: route.request().postData() });
-    if (inputMode === '401') return route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
-    if (inputMode === 'ok') return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
-    if (inputMode === 'errdetail') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: false, detail: 'no such pane: %99' }) });
-    return route.abort();
-  });
-
-  // Intercept /ctl too: controller taps must never drive the real `media` CLI
-  // (pause the house audio, flip the shared popup-channel state) from a test.
-  await page.route('**/ctl', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }));
-
-  // Count /agents polls from the page.
-  const agentsReqs = [];
-  page.on('request', (r) => { if (r.url().endsWith('/agents')) agentsReqs.push(Date.now()); });
-  const pollsIn = (t0, t1) => agentsReqs.filter(t => t >= t0 && t <= t1).length;
-
-  // Track /status polls (T16 reads the channel param to observe `n` cycling).
-  const statusReqs = [];
-  page.on('request', (r) => {
-    const m = r.url().match(/\/status\?channel=(\w+)/);
-    if (m) statusReqs.push(m[1]);
-  });
+  // The page no longer posts /input or /ctl — replying and playback control
+  // moved to Sasonica. The blocks stay as a standing safety net: with
+  // TRUST_TAILNET=1 a real POST /input would inject keystrokes into live tmux
+  // `claude` panes, and that must never be one accidental line of test code
+  // away.
+  await page.route('**/input', (route) => route.abort());
+  await page.route('**/ctl', (route) => route.abort());
 
   // ---- T1: load + SSE connect ----------------------------------------------
   await page.goto(`http://127.0.0.1:${PROXY_PORT}/`, { waitUntil: 'domcontentloaded' });
@@ -167,128 +151,6 @@ function stall(on) {
     rec('T2 SSE liveness frames stamp watchdog', pings >= 1 || m1 > m0,
       pings >= 1 ? `ping heartbeat seen (pings=${pings})`
                  : `no idle window for a ping, but ${m1 - m0} state frames flowed (watchdog fed)`);
-  }
-
-  // ---- T3: server memoizes /agents ~2s (#141 server half) -------------------
-  {
-    const a = await httpGet(SRV_PORT, '/agents', 8000);
-    const b = await httpGet(SRV_PORT, '/agents', 8000);
-    const memoOk = a && b && a.status === 200 && a.body === b.body;
-    await sleep(2500);
-    const c = await httpGet(SRV_PORT, '/agents', 8000);
-    rec('T3 /agents memoized within 2s', !!memoOk, memoOk ? `identical bodies; post-TTL refetch ${c ? c.status : 'n/a'}` : 'bodies differ or error');
-  }
-
-  // ---- T4: collapsed cadence ~12s (#141) ------------------------------------
-  {
-    const t0 = Date.now();
-    await sleep(26000);
-    const n = pollsIn(t0, Date.now());
-    rec('T4 collapsed poll cadence ~12s', n >= 1 && n <= 3, `${n} polls in 26s (expect ~2)`);
-  }
-
-  // ---- T5: expanded cadence ~4s (#141) --------------------------------------
-  {
-    // The tree re-renders under the pill on every poll, so never hold an
-    // element handle across a poll window — query fresh for each click.
-    const clickPill = () => page.click('.aghead', { timeout: 5000 }).then(() => true).catch(() => false);
-    if (!await page.$('.aghead')) rec('T5 expanded poll cadence ~4s', false, 'no agents pill rendered — no tmux claude panes visible to throwaway instance?');
-    else {
-      await clickPill();
-      const t0 = Date.now();
-      await sleep(13500);
-      const n = pollsIn(t0, Date.now());
-      rec('T5 expanded poll cadence ~4s', n >= 2 && n <= 5, `${n} polls in 13.5s (expect ~3)`);
-      if (!await clickPill()) await clickPill();   // collapse again (retry once past a re-render)
-    }
-  }
-
-  // ---- T6: hidden gating (#141) ---------------------------------------------
-  {
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
-      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    const t0 = Date.now();
-    await sleep(35000);
-    const nHidden = pollsIn(t0, Date.now());
-    await page.evaluate(() => {
-      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
-      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
-      document.dispatchEvent(new Event('visibilitychange'));
-    });
-    await sleep(2000);
-    const nBack = pollsIn(t0 + 35000, Date.now());
-    rec('T6 hidden gates /agents polls', nHidden <= 1 && nBack >= 1, `hidden 35s: ${nHidden} polls (expect 0-1); visible again: ${nBack} immediate poll(s)`);
-  }
-
-  // ---- T7: 401 -> pairing toast + in-page token sheet (#142) ----------------
-  {
-    inputMode = '401';
-    const before = inputReqs.length;
-    await page.evaluate(() => {
-      document.getElementById('text').value = 'harness test';
-      document.getElementById('send').click();
-    });
-    let toastOk = false, sheetOk = false;
-    try {
-      await page.waitForFunction(() =>
-        document.getElementById('sheet').classList.contains('on') &&
-        document.getElementById('sheettitle').textContent.includes('amux auth token'), null, { timeout: 5000 });
-      sheetOk = true;
-      toastOk = await page.evaluate(() => document.getElementById('toast').textContent.includes('not paired'));
-    } catch {}
-    await page.screenshot({ path: SHOTS + '/02-token-sheet.png' });
-    rec('T7a 401 -> pairing toast + token sheet', toastOk && sheetOk, `sheet=${sheetOk} toast=${toastOk}`);
-    // Enter a token; the retry must carry it.
-    inputMode = 'ok';
-    await page.fill('#sheetin', 'tok-harness-123');
-    await page.press('#sheetin', 'Enter');
-    await sleep(1500);
-    const retry = inputReqs[inputReqs.length - 1];
-    const carried = inputReqs.length >= before + 2 && retry.headers['x-auth-token'] === 'tok-harness-123';
-    const stored = await page.evaluate(() => localStorage.getItem('amux_token'));
-    const sent = await page.evaluate(() => document.getElementById('send').textContent);
-    rec('T7b sheet token retries request', carried && stored === 'tok-harness-123',
-      `retry header=${retry && retry.headers['x-auth-token']} stored=${stored} send=${JSON.stringify(sent)}`);
-  }
-
-  // ---- T8: sheet Esc cancels, no retry (#142) -------------------------------
-  {
-    await page.evaluate(() => localStorage.removeItem('amux_token'));
-    inputMode = '401';
-    const before = inputReqs.length;
-    await page.evaluate(() => {
-      document.getElementById('text').value = 'esc test';
-      document.getElementById('send').click();
-    });
-    let opened = false;
-    try {
-      await page.waitForFunction(() => document.getElementById('sheet').classList.contains('on'), null, { timeout: 5000 });
-      opened = true;
-    } catch {}
-    await page.press('#sheetin', 'Escape');
-    await sleep(1200);
-    const closed = await page.evaluate(() => !document.getElementById('sheet').classList.contains('on'));
-    const noRetry = inputReqs.length === before + 1;
-    rec('T8 Esc cancels sheet, no retry', opened && closed && noRetry, `opened=${opened} closed=${closed} reqs=${inputReqs.length - before}`);
-  }
-
-  // ---- T9: /input error detail -> toast (#142) ------------------------------
-  {
-    await page.evaluate(() => localStorage.setItem('amux_token', 'tok-harness-123'));
-    inputMode = 'errdetail';
-    await page.evaluate(() => {
-      document.getElementById('text').value = 'err test';
-      document.getElementById('send').click();
-    });
-    let ok = false;
-    try {
-      await page.waitForFunction(() => document.getElementById('toast').textContent.includes('no such pane'), null, { timeout: 5000 });
-      ok = true;
-    } catch {}
-    rec('T9 /input error detail shown as toast', ok);
   }
 
   // ---- T10: kill server -> offbar + dim; restart -> self-heal ---------------
@@ -363,26 +225,19 @@ function stall(on) {
     rec('T12 SSE client cap sheds load (503)', got503 && accepted <= 64, `accepted ${accepted} extra streams before 503 (page holds ~1; cap 64)`);
   }
 
-  // ---- T13: native prompt never used (#142) ---------------------------------
-  rec('T13 native prompt() never called', (await page.evaluate(() => window.__promptCalled)) === 0);
-
   // ---- T14/T15: e-ink theme + solid toast (#146) -----------------------------
   {
     await page.goto(`http://127.0.0.1:${PROXY_PORT}/?eink=1`, { waitUntil: 'domcontentloaded' });
     await sleep(1500);
     const einkOn = await page.evaluate(() => document.documentElement.classList.contains('eink'));
     await page.screenshot({ path: SHOTS + '/07-eink.png' });
-    inputMode = '401';
-    await page.evaluate(() => {
-      localStorage.removeItem('amux_token');
-      document.getElementById('text').value = 'eink sheet';
-      document.getElementById('send').click();
-    });
-    try {
-      await page.waitForFunction(() => document.getElementById('sheet').classList.contains('on'), null, { timeout: 5000 });
-    } catch {}
-    await page.screenshot({ path: SHOTS + '/08-eink-sheet.png' });
-    rec('T14 e-ink theme applies (screenshots for eyeballing)', einkOn);
+    rec('T14 e-ink theme applies (screenshot for eyeballing)', einkOn);
+    // The toast is the only overlay left with words in it, so put one up:
+    // T15 reads its computed style, and the shot shows it on the white page.
+    await page.evaluate(() => document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'c', bubbles: true })));
+    await sleep(400);
+    await page.screenshot({ path: SHOTS + '/08-eink-toast.png' });
     // Toast must be a solid black-on-white pill in DU4 — no alpha, blur, shadow.
     const ts = await page.evaluate(() => {
       const s = getComputedStyle(document.getElementById('toast'));
@@ -391,66 +246,6 @@ function stall(on) {
     const toastSolid = ts.bg === 'rgb(255, 255, 255)' && ts.color === 'rgb(0, 0, 0)' &&
       ts.bw === '2px' && ts.blur === 'none' && ts.shadow === 'none';
     rec('T15 e-ink toast is solid + legible', toastSolid, JSON.stringify(ts));
-  }
-
-  // ---- T16: focus ring — taps and Tab walk passive→input→agents→control→… ---
-  // The same ring for both surfaces; `n` (not Tab) cycles the channel in
-  // CONTROL; Esc bails out; widget taps never advance the ring.
-  {
-    inputMode = 'block';
-    await page.evaluate(() => localStorage.setItem('eink', '0'));
-    await page.goto(`http://127.0.0.1:${PROXY_PORT}/`, { waitUntil: 'domcontentloaded' });
-    await sleep(1500);   // let the first /agents poll land
-    const state = () => page.evaluate(() => ({
-      input: document.getElementById('inp').classList.contains('on'),
-      ctl: document.getElementById('ctl').classList.contains('on'),
-      agents: document.getElementById('agents').classList.contains('on'),
-      agExpanded: document.getElementById('agents').classList.contains('expanded'),
-      agCursor: !!document.getElementById('agents').querySelector('.cursor'),
-      typing: document.activeElement === document.getElementById('text'),
-    }));
-    const tap = () => page.mouse.click(640, 300);   // bare canvas, away from widgets
-    const fmt = (s) => JSON.stringify(s);
-
-    let s = await state();
-    const hasTree = s.agents;
-    rec('T16a page starts passive', !s.input && !s.ctl, `tree=${hasTree}`);
-
-    await tap(); await sleep(300); s = await state();
-    rec('T16b tap: passive -> input (field focused)', s.input && s.typing, fmt(s));
-
-    await tap(); await sleep(300); s = await state();
-    if (hasTree)
-      rec('T16c tap: input -> agents (tree cursor)', !s.input && !s.ctl && s.agExpanded && s.agCursor, fmt(s));
-    else
-      rec('T16c tap: input -> control (no tree)', !s.input && s.ctl, fmt(s));
-    if (hasTree) { await tap(); await sleep(300); s = await state(); }
-    rec('T16d ring reaches control', s.ctl && !s.agCursor, fmt(s));
-
-    const chanBefore = statusReqs[statusReqs.length - 1];
-    await page.keyboard.press('n'); await sleep(400); s = await state();
-    const chanAfter = statusReqs[statusReqs.length - 1];
-    rec("T16e 'n' in control cycles channel", s.ctl && chanAfter && chanAfter !== chanBefore,
-      `'${chanBefore}' -> '${chanAfter}'`);
-
-    await tap(); await sleep(300); s = await state();
-    rec('T16f tap in control wraps to passive', !s.input && !s.ctl, fmt(s));
-
-    for (let i = 0; i < (hasTree ? 3 : 2); i++) { await page.keyboard.press('Tab'); await sleep(250); }
-    s = await state();
-    rec('T16g Tab walks the same ring to control', s.ctl, fmt(s));
-    await page.keyboard.press('Escape'); await sleep(300); s = await state();
-    rec('T16h Esc bails out to passive', !s.input && !s.ctl, fmt(s));
-
-    for (let i = 0; i < (hasTree ? 3 : 2); i++) { await tap(); await sleep(250); }
-    s = await state();
-    if (s.ctl) {
-      await page.click('#pp'); await sleep(300); s = await state();
-      rec('T16i controller button tap stays in control', s.ctl, fmt(s));
-      await page.click('#xbtn'); await sleep(300); s = await state();
-      rec('T16j x button drops to passive', !s.ctl && !s.input, fmt(s));
-    } else rec('T16i/j reached control for widget-tap checks', false, fmt(s));
-    await page.screenshot({ path: SHOTS + '/09-ring.png' });
   }
 
   await browser.close();

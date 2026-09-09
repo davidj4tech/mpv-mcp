@@ -1,8 +1,4 @@
 
-  /* --subband: height of the subtitle band. --figres: the whole bottom strip
-     the fitted picture yields — the band plus the docks stacked on top of it,
-     so a narrated figure is never written on by anything. Both in JS. */
-  :root { --subband: 0px; --figres: 0px; }
   html, body { margin:0; height:100%; background:#000; overflow:hidden;
     /* The gestures on this page are ours, and without saying so we do not get
        them. With the default touch-action the browser claims any two-finger
@@ -39,14 +35,8 @@
      Not permanent — an always-promoted layer costs memory on every screen for
      a gesture that happens occasionally. */
   body.pinching #stage, body.imgzoom #stage { will-change: transform; }
-  /* Zoomed in, the picture is the thing being handled: the tap-to-control
-     layer must not eat a pan. */
+  /* Zoomed in, the picture is the thing being handled: the pointer is a hand. */
   body.imgzoom { cursor: grab; }
-
-  /* Reading size, pinched on the words themselves and remembered per device.
-     One scale for both — the band and the transcript are the same sentences,
-     and two knobs for one preference is a setting nobody can repeat. */
-  :root { --txscale: 1; }
 
   .layer {
     position: fixed; inset: 0; width: 100vw; height: 100vh;
@@ -56,24 +46,13 @@
   .layer.on { opacity: 1; }
   /* Fit-within-screen: the whole image visible, letterboxed on black.
      Figures get this by default (their edge labels are content — cover
-     crops them on small screens); the fit button forces it for everything. */
-  .layer.fit { object-fit: contain; background: #000;
-               transition: opacity 1.8s ease, height .35s ease; }
-  /* Subtitle band: while a FITTED image (a figure) is up and there are words
-     to show, the picture yields the bottom strip instead of being written on.
-     Shrink via `height`, not `bottom`: .layer pins height:100vh (which would
-     win over-constrained), and `height:auto` on an <img> means its intrinsic
-     height, not "whatever top/bottom leave". contain re-letterboxes to fit. */
-  /* Any layer yields the strip, not only a fitted one. A cover image that
-     kept its full height simply had the band laid over its bottom edge, which
-     is the thing the band exists to stop — and it meant "split screen" was
-     true for figures and a polite fiction for everything else. Cover art
-     crops into the shorter box, which is what cover art is for. */
-  body.subband .layer { height: calc(100vh - var(--figres)); }
+     crops them on small screens); the `fit` preference forces it for
+     everything, `fill` for nothing. */
+  .layer.fit { object-fit: contain; background: #000; }
   /* A figure whose session ISN'T the one speaking dims to backdrop — it's
      still there, but no longer claims to illustrate the current voice. */
   .layer.stale { filter: brightness(.3) saturate(.5); }
-  /* ---- e-ink mode (?eink=1, persisted per device; 'e' toggles) ------------
+  /* ---- e-ink mode (?eink=1, persisted per device; ?eink=0 back) -----------
      Ink on paper for the Pine Note: white page, NO crossfades / pan-zoom /
      breathing (partial-refresh ghosting), no video layer. Dark SVG figures
      invert to black-line-on-white; raster art goes grayscale (inversion
@@ -91,21 +70,12 @@
   html.eink .layer.fit { background: #fff; }
   html.eink .layer.stale.on { opacity: .2; filter: grayscale(1); }
   html.eink #pulse, html.eink #ytwrap { display: none !important; }
-  html.eink #title.scroll { animation: none !important; }
   html.eink #cap, html.eink #sub {
     color: #111; background: rgba(255,255,255,.92);
     backdrop-filter: none; text-shadow: none;
   }
   html.eink #sub { color: #000; font-weight: 600; }
   html.eink #fig { color: #000; background: rgba(255,255,255,.92); }
-  html.eink #ctl, html.eink #inp {
-    background: rgba(255,255,255,.94); backdrop-filter: none;
-    color: #111; border: 1.5px solid #000;
-  }
-  html.eink #ctl button, html.eink #send, html.eink #text { color: #111; }
-  html.eink #ctl button.lit { color: #000; background: rgba(0,0,0,.12); }
-  html.eink #clock { color: #111; }
-  html.eink #target { background: rgba(0,0,0,.08); color: #000; }
   /* Ken Burns variants — picked at random per image */
   @keyframes kb1 { from { transform: scale(1.06) translate(0,0); }
                    to   { transform: scale(1.18) translate(-2%,-1.5%); } }
@@ -117,24 +87,23 @@
                    to   { transform: scale(1.08) translate(-1%,1.5%); } }
   /* Video layer: the muted YouTube mirror of what the phone is playing.
      Sits above the ambient image layers, below every overlay (#pulse onward
-     in DOM order). pointer-events off — taps keep driving the canvas UI. */
+     in DOM order). pointer-events off — taps never had anything to hit here
+     and the picture's own pan reads them off the document. */
   #ytwrap {
     position: fixed; inset: 0; background: #000;
     opacity: 0; transition: opacity 1.4s ease; pointer-events: none;
   }
   #ytwrap.on { opacity: 1; }
   #ytwrap iframe { width: 100vw; height: 100vh; border: 0; }
+  /* The image's own caption, above the spoken sentence. */
   #cap {
     position: fixed; left: 50%;
-    bottom: calc(max(2vh, env(safe-area-inset-bottom)) + 98px);  /* above #inp */
+    bottom: calc(max(4vh, env(safe-area-inset-bottom)) + 74px);  /* above #sub */
     transform: translateX(-50%); max-width: 82vw;
     padding: .55em 1.1em; border-radius: 999px;
     font: 15px/1.45 system-ui, sans-serif; color: #eee; text-align: center;
     background: rgba(10,10,10,.55); backdrop-filter: blur(12px);
     opacity: 0; transition: opacity 1s ease; pointer-events: none;
-  }
-  body.subband #cap {
-    bottom: calc(var(--subband) + max(2vh, env(safe-area-inset-bottom)) + 98px);
   }
   #cap.on { opacity: 1; }
   #cap.hide { opacity: 0; }
@@ -149,7 +118,7 @@
     position: fixed; left: 50%; bottom: max(4vh, env(safe-area-inset-bottom));
     transform: translateX(-50%); max-width: 86vw;
     padding: .5em 1.1em; border-radius: 14px;
-    font: 500 calc(17px * var(--txscale))/1.5 system-ui, sans-serif; color: #ffe9a8;
+    font: 500 17px/1.5 system-ui, sans-serif; color: #ffe9a8;
     text-align: center; text-wrap: balance;
     background: rgba(8,8,8,.68); backdrop-filter: blur(12px);
     opacity: 0; transition: opacity .5s ease; pointer-events: none;
@@ -159,188 +128,6 @@
      not live. */
   #sub.past { color: #cbbf9a; }
   html.eink #sub.past { color: #333; }
-  /* The band IS the door. A 40px icon in a corner is a poor way to offer the
-     whole reply when the words themselves are sitting right there, full width
-     and unmistakably about text — tapping what you are reading to get more of
-     what you are reading needs no explaining, and needs no icon to be
-     recognised first. The corner button stays for the case where the band is
-     not up. */
-  body.subband #sub { pointer-events: auto; cursor: pointer; }
-  /* The strip is one target, not just the glyphs in it. #sub is only as tall
-     as its text, so on a phone a thumb that lands a few millimetres low was
-     hitting the canvas behind and cycling the mode — the bottom half doing the
-     top half's job. */
-  #bandhit { display: none; }
-  body.subband #bandhit {
-    display: block; position: fixed; left: 0; right: 0; bottom: 0;
-    height: var(--subband); z-index: 5; cursor: pointer;
-  }
-  body.txopen #bandhit { display: none; }
-  /* ...but over a figure it stops being a floating pill and becomes the band
-     the image just made room for: full width, flat to the bottom edge, with a
-     hairline where the picture ends. --subband is measured in JS from this
-     element's own height, so a three-line sentence pushes the figure up
-     rather than spilling back over it. */
-  body.subband #sub {
-    left: 0; right: 0; bottom: 0; transform: none; max-width: none;
-    padding: .7em 5vw calc(.7em + env(safe-area-inset-bottom));
-    border-radius: 0; background: rgba(6,6,6,.86);
-    border-top: 1px solid rgba(255,233,168,.22);
-    transition: opacity .35s ease;
-  }
-  html.eink body.subband #sub {
-    background: #fff; border-top: 1.5px solid #000;
-  }
-  /* ---- the whole reply -----------------------------------------------
-     The band shows one sentence because that is what is being said. The rest
-     of the reply still exists, and on a phone there is no scrollback to find
-     it in — so #zoom opens the clip out into a scrollable transcript with the
-     live line lit. */
-  /* Top-right, and NOT down by the words it opens.
-     The obvious home was above the band, and it is wrong at phone width: the
-     reply dock is min(96vw, 620px) and centred, so on a 420px screen it spans
-     nearly the whole bottom — every bottom corner is already the dock's. The
-     transcript harness found it by being unable to click through the send
-     button. Top-right is free, and it is also where #txclose sits, so the same
-     corner opens the transcript and closes it. */
-  #zoom {
-    position: fixed; right: max(12px, env(safe-area-inset-right));
-    top: max(12px, env(safe-area-inset-top));
-    width: 40px; height: 40px; display: none; place-items: center;
-    border: 0; border-radius: 999px; padding: 0; cursor: pointer;
-    color: #ffe9a8; background: rgba(8,8,8,.62); backdrop-filter: blur(10px);
-    opacity: .78; transition: opacity .3s ease, bottom .3s ease;
-  }
-  /* Only while there are words to open. */
-  body.hassub #zoom { display: grid; }
-  #zoom:hover, #zoom:focus-visible { opacity: 1; }
-
-  body.txopen #zoom { display: none; }
-
-  /* The grab bar on the seam. Sized for a thumb but drawn as a hairline
-     handle: it is a control that must be findable without ever being the
-     thing you look at. */
-  #split {
-    position: fixed; left: 0; right: 0; z-index: 45;
-    bottom: calc(var(--subband) - 11px); height: 22px;
-    display: grid; place-items: center; cursor: ns-resize;
-    touch-action: none;                     /* the drag is ours, not the page's */
-  }
-  #split span {
-    width: 46px; height: 4px; border-radius: 999px;
-    background: rgba(255,233,168,.5); transition: background .2s ease;
-  }
-  #split:hover span, body.splitting #split span { background: #ffe9a8; }
-  html.eink #split span { background: #000; }
-
-  /* Open into the words' half, so the figure stays visible above what is
-     being read about it. Only when there IS a figure — with no picture to
-     keep, the transcript takes the screen. */
-  /* The transcript is a HALF, not a modal. --txtop is where the seam is (see
-     txTop() in the JS): the band's own height when there is a band, the
-     dragged split when there is one, and half the screen otherwise. It used to
-     key off body.subband alone, so with captions switched off — no band — it
-     fell back to inset:0 and covered the screen, which reads as a pop-up
-     rather than a split, and was reported as exactly that. */
-  #tx {
-    position: fixed; inset: var(--txtop, 50vh) 0 0 0;
-    /* ...except the transcript, which is the one thing on the page that does
-       scroll. pan-y gives it vertical dragging and keeps the pinch (reading
-       size) ours. */
-    touch-action: pan-y; z-index: 40;
-    background: rgba(6,7,9,.94); backdrop-filter: blur(18px);
-    overflow-y: auto; overscroll-behavior: contain;
-    padding: max(16vh, 96px) 7vw max(24vh, 140px);
-    font: 400 calc(20px * var(--txscale))/1.7 system-ui, sans-serif; color: #f2ead8;
-  }
-  #tx p {
-    margin: 0 0 .85em; text-wrap: pretty;
-    color: rgba(242,234,216,.42);            /* already said: present, done */
-    transition: color .3s ease, filter .45s ease, opacity .45s ease;
-  }
-  /* A double-tap has landed and the voice is on its way there. Brief, and
-     only ever confirmation — the line becomes .now a moment later. */
-  #tx p.seeking { color: #ffe9a8; text-shadow: 0 0 18px rgba(255,233,168,.55); }
-  /* The live sentence. Lit, and the thing the panel scrolls to. */
-  #tx p.now { color: #ffe9a8; }
-  /* Not yet spoken. Masked rather than missing: the words hold their space so
-     the page does not reflow under the reader as the voice catches up, but
-     they cannot be read by accident — peripheral vision is enough to spoil a
-     [[reveal:]], and the voice arriving second is the whole point of one.
-     Scrolling past the live line is a deliberate act, and it clears them. */
-  #tx p.ahead {
-    color: transparent; filter: blur(7px); opacity: .5;
-    text-shadow: 0 0 14px rgba(242,234,216,.45);
-    user-select: none;
-  }
-  body.txahead #tx p.ahead {
-    color: rgba(242,234,216,.42); filter: none; opacity: 1;
-    text-shadow: none; user-select: auto;
-  }
-  /* Shown once the reader has scrolled away from the live line — the way back
-     without hunting for it. Also what un-reveals the text ahead. */
-  #txlive {
-    position: fixed; left: 50%; transform: translateX(-50%);
-    bottom: max(5vh, calc(env(safe-area-inset-bottom) + 16px));
-    padding: .55em 1.2em; border: 0; border-radius: 999px; cursor: pointer;
-    font: 600 14px/1.4 system-ui, sans-serif; color: #16130a;
-    background: #ffe9a8; box-shadow: 0 6px 22px rgba(0,0,0,.5);
-  }
-  #tx { border-top: 1px solid rgba(255,233,168,.22); padding-top: 3vh; }
-  html.eink #tx { border-top: 1.5px solid #000; }
-
-  /* Pinned to the foot of the panel, not the end of the text: the answer to
-     "is it still going" must not be something you scroll to find. */
-  /* Top-left of the panel, NOT the bottom centre.
-     It sat exactly where "Back to the voice" sits, and the two swap: pressing
-     the button hides it and reveals this in the same spot. What that looks
-     like is a button you pressed turning into a spinner and doing nothing —
-     reported exactly that way. Two controls sharing a position is a bug even
-     when only one is ever visible. */
-  #txwork {
-    position: fixed; left: 50%; transform: translateX(-50%);
-    top: max(12px, env(safe-area-inset-top));
-    display: flex; align-items: center; gap: .55em;
-    padding: .5em 1.1em; border-radius: 999px;
-    font: 500 13px/1.4 system-ui, sans-serif; color: #ffe9a8;
-    background: rgba(12,12,14,.86); backdrop-filter: blur(10px);
-  }
-  /* The thinking dots, mirroring Sasonica's transcript line: three that pulse
-     in sequence. currentColor, so the #txwork pill's colour carries them. */
-  .tdots { display: inline-flex; align-items: center; gap: .3em; }
-  .tdots i {
-    width: .4em; height: .4em; border-radius: 999px;
-    background: currentColor; opacity: .3;
-    animation: tdot 1.2s ease-in-out infinite;
-  }
-  .tdots i:nth-child(2) { animation-delay: .2s; }
-  .tdots i:nth-child(3) { animation-delay: .4s; }
-  @keyframes tdot {
-    0%, 80%, 100% { opacity: .25; transform: scale(.8); }
-    40% { opacity: .95; transform: scale(1); }
-  }
-
-  html.eink #txwork { background: #fff; color: #000; border: 1.5px solid #000; }
-  /* No motion on e-ink (it ghosts): hold the dots lit and still. */
-  html.eink .tdots i { animation: none; opacity: .7; }
-
-  #txclose {
-    position: fixed; top: max(12px, env(safe-area-inset-top));
-    right: max(12px, env(safe-area-inset-right));
-    width: 44px; height: 44px; display: grid; place-items: center;
-    border: 0; border-radius: 999px; padding: 0; cursor: pointer;
-    color: #f2ead8; background: rgba(20,20,24,.7); opacity: .75;
-  }
-  #txclose:hover, #txclose:focus-visible { opacity: 1; }
-  /* E-ink: no blur to hide behind (DU4 has four greys and no subtlety), so
-     ahead-of-the-voice is simply not drawn. Same promise, honest medium. */
-  html.eink #tx { background: #fff; color: #000; }
-  html.eink #tx p { color: #555; }
-  html.eink #tx p.now { color: #000; font-weight: 600; }
-  html.eink #tx p.ahead { visibility: hidden; filter: none; }
-  html.eink body.txahead #tx p.ahead { visibility: visible; color: #555; }
-  html.eink #txlive { background: #000; color: #fff; }
-
   /* Figure badge: this image says something — it isn't wallpaper. */
   #fig {
     position: fixed; top: max(12px, env(safe-area-inset-top)); left: 16px;
@@ -360,118 +147,7 @@
   }
   body.speaking #pulse { animation: breathe 2.8s ease-in-out infinite; }
   @keyframes breathe { 0%, 100% { opacity: 0; } 50% { opacity: .65; } }
-  /* --- audio controller (Tab / tap walk to CONTROL) — kin of the tmux popup ---
-     Geometry mirrors the tmux binding (`display-popup -w 34 -h 4 -x R -y 6`):
-     a compact panel anchored to the RIGHT edge near the top, sliding in from
-     the right, instead of a wide bottom sheet. */
-  /* Bottom dock: the controller shares the input's slot (they're mutually
-     exclusive — CONTROL means hotkeys, not typing), sliding up from below. */
-  #ctl {
-    position: fixed; left: 50%; bottom: max(2vh, env(safe-area-inset-bottom));
-    transform: translateX(-50%) translateY(calc(100% + 24px));
-    width: min(96vw, 620px); box-sizing: border-box;
-    padding: .45em .6em; border-radius: 18px;
-    background: rgba(10,10,10,.72); backdrop-filter: blur(14px);
-    color: #eee; font: 14px/1.4 system-ui, sans-serif;
-    transition: transform .3s ease, opacity .3s ease; opacity: 0;
-  }
-  #ctl.on { transform: translateX(-50%) translateY(0); opacity: 1; }
-  /* CONTROL mode: hotkeys are live — amber ring (matches the input's). */
-  #ctl.focused { box-shadow: 0 0 0 2px rgba(255,215,95,.75); }
-  #ctl .row { display: flex; align-items: center; gap: .15em; }
-  #ctl button {
-    background: none; border: 0; color: #eee; font-size: 19px;
-    min-width: 36px; min-height: 38px; border-radius: 10px;
-    cursor: pointer; -webkit-tap-highlight-color: transparent;
-    flex: 0 0 auto;
-  }
-  /* Narrow screens: tighter buttons so the merged transport+volume row
-     (10 buttons when all shown) keeps every key on the panel. */
-  @media (max-width: 430px) {
-    #ctl button { min-width: 29px; min-height: 34px; font-size: 17px; }
-    #ctl .row { gap: .1em; }
-    #clock { font-size: 13px; min-width: 70px; }
-  }
-  #ctl button:active { background: rgba(255,255,255,.14); }
-  #vdn { margin-left: auto; }   /* splits transport (left) from volume (right) */
-  #ctl button.lit { color: #ffd75f; }
-  .ic { width: 19px; height: 19px; display: block; margin: auto; }
-  /* Loading spinner: a play button becomes this arc while its clip is rendered
-     + queued for speech (say/replay block for seconds before audio starts). */
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .ic.spin { animation: spin .7s linear infinite; transform-origin: 50% 50%; }
-  html.eink .ic.spin { animation: none; opacity: .55; }   /* no motion on e-ink (ghosts) */
-  #target .ic { width: 16px; height: 16px; display: inline-block;
-                vertical-align: -3px; margin-right: .35em; }
-  #send .ic { margin: auto; }
-  #marq { flex: 1; overflow: hidden; white-space: nowrap; }
-  #title { display: inline-block; padding-left: 0; }
-  #title.scroll { animation: marq var(--marq-dur, 14s) linear infinite; }
-  @keyframes marq {
-    0%, 12%  { transform: translateX(0); }
-    88%, 100% { transform: translateX(var(--marq-shift, -40%)); }
-  }
-  #clock { flex: 0 0 auto; min-width: 78px; text-align: center;
-           font-variant-numeric: tabular-nums;
-           color: #ddd; white-space: nowrap; overflow: hidden;
-           border-radius: 8px; padding: .25em .2em; }
-  /* Input bar: reply to whoever just spoke, from the canvas itself. Persistent
-     along the bottom (the PASSIVE resting surface); focus ring + full opacity
-     in INPUT mode. Tapping it (or first Tab) focuses it. */
-  #inp {
-    position: fixed; left: 50%; transform: translateX(-50%);
-    /* Lifted to leave the bottom edge to the agents pill beneath it. */
-    bottom: calc(max(2vh, env(safe-area-inset-bottom)) + 30px);
-    width: min(96vw, 620px); box-sizing: border-box;
-    display: flex; align-items: flex-end; gap: .4em;   /* buttons hug the bottom as text grows */
-    padding: .5em .6em; border-radius: 18px;
-    background: rgba(10,10,10,.5); backdrop-filter: blur(14px);
-    box-shadow: 0 0 0 1px rgba(255,255,255,.08);
-    transition: opacity .25s ease, background .2s ease, box-shadow .2s ease;
-    opacity: .5;                               /* dim while resting (PASSIVE) */
-  }
-  /* The reply dock and the caption ride up on top of the band — the band is
-     text, and nothing translucent should sit on text being read aloud. */
-  body.subband #inp { bottom: calc(var(--subband) + 14px); }
-  body.subband #agents { bottom: calc(var(--subband) + 6px); }
-  #inp.on { opacity: 1; background: rgba(10,10,10,.74);
-            box-shadow: 0 0 0 2px rgba(255,215,95,.75); }  /* INPUT focus ring */
-  #inp.under { opacity: 0; pointer-events: none; }  /* CONTROL: controller takes the dock */
-  /* An expanded agent tree grows up from the pill straight through the
-     input's spot — clear the input while the menu is open (but not while
-     composing, when the tree itself is .hide). */
-  #agents.expanded.on:not(.hide) ~ #inp { opacity: 0; pointer-events: none; }
-  #target {
-    background: rgba(255,255,255,.1); border: 0; color: #ffd75f;
-    font: 600 13px/1.4 system-ui, sans-serif; padding: .45em .8em;
-    border-radius: 999px; white-space: nowrap; cursor: pointer;
-  }
-  #text {
-    flex: 1; background: none; border: 0; outline: none; color: #eee;
-    font: 16px/1.35 system-ui, sans-serif; min-width: 0;
-    resize: none; overflow-y: auto; max-height: 6.4em;  /* grows to ~5 lines, then scrolls */
-    padding: 0; margin: 0; box-sizing: border-box;
-  }
-  #text::-webkit-scrollbar { width: 0; }
-  #send {
-    background: none; border: 0; color: #eee; font-size: 20px;
-    min-width: 40px; min-height: 40px; cursor: pointer; border-radius: 12px;
-  }
-  #send:active { background: rgba(255,255,255,.14); }
-  /* Keymap help overlay (the popup's `?`). Centered card, tap/`?`/Esc dismiss. */
-  #help {
-    position: fixed; inset: 0; margin: auto; width: min(92vw, 460px);
-    max-height: 82vh; height: max-content; overflow: auto;
-    padding: 1em 1.2em; border-radius: 16px; z-index: 30;
-    background: rgba(12,12,14,.93); backdrop-filter: blur(16px); color: #eee;
-    font: 14px/1.5 system-ui, sans-serif; box-shadow: 0 10px 40px rgba(0,0,0,.5);
-    opacity: 0; pointer-events: none; transition: opacity .2s ease;
-  }
-  #help.on { opacity: 1; pointer-events: auto; }
-  #help .hh { font-weight: 600; margin-bottom: .6em; color: #ffd75f; }
-  #help .hg { display: grid; grid-template-columns: auto 1fr; gap: .25em .9em; }
-  #help .hg b { color: #ffd75f; font-weight: 600; white-space: nowrap; }
-  /* Transient toast (top-center): brief status like "web UI not available". */
+  /* Transient toast (top-center): brief status, like which way `c` just went. */
   #toast {
     position: fixed; left: 50%; transform: translateX(-50%);
     top: max(16px, env(safe-area-inset-top)); max-width: 86vw; z-index: 40;
@@ -486,40 +162,6 @@
     background: #fff; color: #000; border: 2px solid #000;
     backdrop-filter: none; box-shadow: none;
   }
-  /* In-page input sheet (token / typed-seek / open-URL): replaces native
-     window.prompt so it respects the e-ink theme and isn't a dead modal on a
-     keyboardless wall (#142). Scrim + card, matching #help. */
-  #sheet {
-    position: fixed; inset: 0; z-index: 50; display: none;
-    align-items: center; justify-content: center;
-    background: rgba(6,6,8,.55); backdrop-filter: blur(4px);
-  }
-  #sheet.on { display: flex; }
-  #sheet .card {
-    width: min(92vw, 460px); padding: 1em 1.2em; border-radius: 16px;
-    background: rgba(16,16,18,.96); backdrop-filter: blur(16px); color: #eee;
-    box-shadow: 0 10px 40px rgba(0,0,0,.5); font: 14px/1.5 system-ui, sans-serif;
-  }
-  #sheet .sh { font-weight: 600; color: #ffd75f; margin-bottom: .6em; }
-  #sheet input {
-    width: 100%; box-sizing: border-box; padding: .55em .7em; border-radius: 10px;
-    border: 1px solid rgba(255,255,255,.18); background: rgba(0,0,0,.35);
-    color: #eee; font: 16px/1.3 system-ui, sans-serif; outline: none;
-  }
-  #sheet input:focus { border-color: rgba(255,215,95,.7); }
-  #sheet .btns { display: flex; justify-content: flex-end; gap: .5em; margin-top: .9em; }
-  #sheet button {
-    min-height: 40px; padding: 0 1.1em; border: 0; border-radius: 10px;
-    cursor: pointer; font: 600 14px/1 system-ui, sans-serif;
-  }
-  #sheet .ok { background: rgba(255,215,95,.9); color: #1a1a1a; }
-  #sheet .cancel { background: rgba(255,255,255,.12); color: #eee; }
-  html.eink #sheet { background: rgba(255,255,255,.7); backdrop-filter: none; }
-  html.eink #sheet .card { background: #fff; color: #000; border: 2px solid #000; }
-  html.eink #sheet .sh { color: #000; }
-  html.eink #sheet input { background: #fff; color: #000; border-color: #000; }
-  html.eink #sheet .ok { background: #000; color: #fff; }
-  html.eink #sheet .cancel { background: #fff; color: #000; border: 1px solid #000; }
   /* Room-legible disconnect: a stalled/offline wall looks live from across a
      room with only the 8px dot, so after ~10s down we grey the canvas (scrim
      backdrop-filter, no conflict with the .layer filters) and float a big
@@ -538,125 +180,3 @@
   }
   html.eink #offbar { background: rgba(255,255,255,.72); backdrop-filter: none; }
   html.eink #offbar .msg { background: #fff; color: #000; border: 2px solid #000; }
-  /* Agent tree: sessions as collapsible groups; each holds its claude panes
-     with live state, a peek (output) and a play (its last clip) button. Tap a
-     pane label to aim the reply box at it. Hidden until there's a session. */
-  #agents {
-    position: fixed; left: 50%; transform: translateX(-50%); z-index: 25;
-    bottom: max(1vh, env(safe-area-inset-bottom));  /* just under the input */
-    display: none; width: min(96vw, 620px);
-    /* Pill at the bottom edge; the expanded session list grows UPWARD from
-       it (over the input's spot — see the #inp sibling rule below). */
-    flex-direction: column-reverse; gap: .25em;
-  }
-  #agents.on { display: flex; }
-  #agents.hide { display: none !important; }       /* hidden while composing a reply */
-  /* Top toggle: the whole tree collapses behind one pill (dot + count) so it
-     doesn't dominate a narrow phone screen. */
-  #agents .aghead {
-    display: flex; align-items: center; gap: .5em; padding: .4em .85em;
-    border-radius: 999px; cursor: pointer; align-self: center;
-    background: rgba(10,10,10,.62); backdrop-filter: blur(10px);
-    color: #eee; font: 600 13px/1.3 system-ui, sans-serif;
-    -webkit-tap-highlight-color: transparent;
-  }
-  #agents .aghead:active { background: rgba(255,255,255,.1); }
-  /* Collapsed, the pill sits over the artwork all day — keep it transparent
-     until it's engaged so it doesn't stamp a dark chip on every image. The
-     text-shadow keeps the count legible over light art. On eink the #eee
-     text NEEDS the chip (white on paper-white), so keep it there. */
-  #agents:not(.expanded) .aghead { background: transparent; backdrop-filter: none;
-                                   text-shadow: 0 1px 4px rgba(0,0,0,.9); }
-  #agents:not(.expanded) .aghead:active { background: rgba(10,10,10,.62); }
-  html.eink #agents:not(.expanded) .aghead { background: rgba(10,10,10,.62);
-                                             text-shadow: none; }
-  #agents .atitle { color: #ddd; }
-  #agents .aghead .chev { color: #999; font-size: 11px; transition: transform .15s ease; }
-  #agents.expanded .aghead .chev { transform: rotate(90deg); }
-  #agents .aghead.working  .dot { background: #38bdf8; }
-  #agents .aghead.approval .dot { background: #f87171; }
-  #agents .aghead.input    .dot { background: #ffd75f; animation: agpulse 1.8s ease-out infinite; }
-  #agents .aglist { display: none; flex-direction: column; gap: .25em;
-                    max-height: 60vh; overflow-y: auto; scrollbar-width: none; }
-  #agents.expanded .aglist { display: flex; }
-  #agents .aglist::-webkit-scrollbar { width: 0; }
-  #agents .sess { background: rgba(10,10,10,.62); backdrop-filter: blur(10px);
-                  border-radius: 12px; overflow: hidden; }
-  #agents .shead { display: flex; align-items: center; gap: .5em; padding: .45em .7em;
-                   cursor: pointer; color: #eee; font: 600 14px/1.3 system-ui, sans-serif;
-                   -webkit-tap-highlight-color: transparent; }
-  #agents .shead:active { background: rgba(255,255,255,.08); }
-  #agents .chev { color: #999; font-size: 11px; transition: transform .15s ease; }
-  #agents .sess.open .chev { transform: rotate(90deg); }
-  #agents .sname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #agents .scount { color: #999; font-weight: 400; font-size: 12px; }
-  #agents .panes { display: none; flex-direction: column; gap: .1em;
-                   padding: 0 .4em .35em 1.5em; }
-  #agents .sess.open .panes { display: flex; }
-  #agents .pane { display: flex; align-items: center; gap: .5em; padding: .3em .4em;
-                  border-radius: 8px; cursor: pointer; color: #ddd;
-                  font: 13px/1.3 system-ui, sans-serif; }
-  #agents .pane:active { background: rgba(255,255,255,.1); }
-  #agents .pane .lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #agents .pane button { background: none; border: 0; color: #bbb; cursor: pointer;
-                         min-width: 30px; min-height: 26px; border-radius: 6px; flex: 0 0 auto; }
-  #agents .pane button:active { background: rgba(255,255,255,.14); }
-  #agents .pane button .ic { width: 15px; height: 15px; }
-  #agents .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: #888; }
-  #agents .pane.working .dot,  #agents .sess.working  > .shead .dot { background: #38bdf8; }
-  #agents .pane.approval .dot, #agents .sess.approval > .shead .dot { background: #f87171; }
-  #agents .pane.input .dot,    #agents .sess.input    > .shead .dot {
-    background: #ffd75f; animation: agpulse 1.8s ease-out infinite; }
-  @keyframes agpulse {
-    0%   { box-shadow: 0 0 0 0 rgba(255,215,95,.6); }
-    70%  { box-shadow: 0 0 0 7px rgba(255,215,95,0); }
-    100% { box-shadow: 0 0 0 0 rgba(255,215,95,0); }
-  }
-  /* Peek panel: a pane's recent output. */
-  #peek {
-    position: fixed; left: 50%; transform: translateX(-50%);
-    top: max(8px, env(safe-area-inset-top)); z-index: 26; display: none;
-    width: min(97vw, 960px); max-height: 80vh; overflow: auto;
-    background: rgba(8,8,10,.96); backdrop-filter: blur(14px); border-radius: 12px;
-    padding: .5em .7em; box-shadow: 0 10px 40px rgba(0,0,0,.5);
-  }
-  #peek.on { display: block; }
-  #peek .ph { font: 600 13px/1.4 system-ui, sans-serif; color: #ffd75f; margin-bottom: .3em; }
-  #peek pre { margin: 0; white-space: pre-wrap; word-break: break-word;
-              font: 12px/1.35 ui-monospace, Menlo, monospace; color: #ccd; }
-  #peek .turn { position: relative; border-top: 1px solid rgba(255,255,255,.08);
-                padding: .5em 2.4em .5em .3em; cursor: pointer; }
-  #peek .turn:first-of-type { border-top: 0; }
-  #peek .tbody { white-space: pre-wrap; word-break: break-word; color: #cdd;
-                font: 13.5px/1.5 system-ui, sans-serif;
-                max-height: 6.6em; overflow: hidden;
-                -webkit-mask-image: linear-gradient(#000 68%, transparent);
-                mask-image: linear-gradient(#000 68%, transparent); }
-  #peek .turn.open .tbody { max-height: none; -webkit-mask-image: none; mask-image: none; }
-  #peek .tplay { position: absolute; top: .35em; right: .25em; z-index: 1;
-                 background: none; border: 0; color: #bbb; cursor: pointer;
-                 min-width: 30px; min-height: 26px; border-radius: 6px; }
-  #peek .tplay:active { background: rgba(255,255,255,.14); }
-  #peek .tplay .ic { width: 15px; height: 15px; }
-  html.eink #peek .tbody { color: #000; -webkit-mask-image: none; mask-image: none; }
-  html.eink #peek .turn { border-top-color: #000; }
-  html.eink #agents .sess { background: #fff; color: #000; border: 1px solid #000; }
-  html.eink #agents .shead, html.eink #agents .pane { color: #000; }
-  html.eink #agents .dot { background: #000; }
-  html.eink #agents .pane.input .dot, html.eink #agents .sess.input > .shead .dot {
-    animation: none; box-shadow: 0 0 0 2px #000; }
-  html.eink #peek { background: #fff; color: #000; border: 1px solid #000; }
-  html.eink #peek pre { color: #000; }
-  /* Keyboard navigation (tmux-chooser style): the .cursor row is where j/k
-     landed — the top "agents" pill is itself selectable (l/h expand/collapse
-     the whole tree). Amber ring + tint, matching the input/controller focus. */
-  #agents .aghead.cursor, #agents .shead.cursor, #agents .pane.cursor,
-  #peek .turn.cursor {
-    box-shadow: inset 0 0 0 2px rgba(255,215,95,.85);
-    background: rgba(255,215,95,.14);
-  }
-  #peek .turn.cursor { border-radius: 8px; }
-  html.eink #agents .aghead.cursor, html.eink #agents .shead.cursor,
-  html.eink #agents .pane.cursor, html.eink #peek .turn.cursor {
-    box-shadow: inset 0 0 0 2px #000; background: rgba(0,0,0,.08);
-  }

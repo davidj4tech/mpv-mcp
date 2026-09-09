@@ -10,35 +10,6 @@
 <style>/*__CANVAS_CSS__*/</style>
 </head>
 <body>
-<!-- Unified icon set: one monochrome inline-SVG sprite (currentColor, uniform
-     2px stroke) instead of the emoji/text-glyph mix — emoji render as colored
-     pictographs with per-device fonts, exactly what the tmux popup's
-     PAUSE_GLYPH comment warns about. -->
-<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
-  <symbol id="i-play" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5l11 7-11 7z"/></symbol>
-  <symbol id="i-pause" viewBox="0 0 24 24"><path fill="currentColor" d="M7 5h3v14H7zM14 5h3v14h-3z"/></symbol>
-  <symbol id="i-prev" viewBox="0 0 24 24"><path fill="currentColor" d="M7 5h2v14H7zM19 5l-9 7 9 7z"/></symbol>
-  <symbol id="i-next" viewBox="0 0 24 24"><path fill="currentColor" d="M15 5h2v14h-2zM5 5l9 7-9 7z"/></symbol>
-  <symbol id="i-minus" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 12h12"/></symbol>
-  <symbol id="i-plus" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 12h12M12 6v12"/></symbol>
-  <symbol id="i-slower" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M7 8l-4 4 4 4M21 12H4"/></symbol>
-  <symbol id="i-faster" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4-4 4M3 12h17"/></symbol>
-  <symbol id="i-mute" viewBox="0 0 24 24"><path fill="currentColor" d="M4 9v6h4l5 4V5L8 9z"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M16 9l5 6M21 9l-5 6"/></symbol>
-  <symbol id="i-bell" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10 21h4"/></symbol>
-  <symbol id="i-bell-off" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M6 16v-5a6 6 0 0112 0v5l2 2H4z"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M10 21h4M4 4l16 16"/></symbol>
-  <symbol id="i-cc" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M7 12h4M7 15.5h7"/></symbol>
-  <symbol id="i-fit" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></symbol>
-  <symbol id="i-skipb" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M11 7l-5 5 5 5M18 7l-5 5 5 5"/></symbol>
-  <symbol id="i-skipf" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5-5 5M6 7l5 5-5 5"/></symbol>
-  <symbol id="i-kbd" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M6.5 10h.01M10.5 10h.01M14.5 10h.01M18 10h.01M7.5 14.5h9"/></symbol>
-  <symbol id="i-close" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></symbol>
-  <symbol id="i-send" viewBox="0 0 24 24"><path fill="currentColor" d="M3 11l18-8-7 18-3-7z"/></symbol>
-  <symbol id="i-note" viewBox="0 0 24 24"><path fill="currentColor" d="M9 18.5A2.5 2.5 0 116.5 16c.6 0 1.1.2 1.5.5V5l10-2v12.5a2.5 2.5 0 11-2.5-2.5c.6 0 1.1.2 1.5.5V7L9 8.6z"/></symbol>
-  <symbol id="i-notes" viewBox="0 0 24 24"><path fill="currentColor" d="M7 19a2 2 0 110-4c.4 0 .7.1 1 .2V6l9-1.8V15a2 2 0 11-2-2c.4 0 .7.1 1 .2V7.5L9 8.9V19z"/><path stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M4 4.5l1.5 1"/></symbol>
-  <symbol id="i-book" viewBox="0 0 24 24"><path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M4 7h16M4 12h16M4 17h10"/></symbol>
-  <symbol id="i-reply" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M9 6L4 11l5 5M4 11h11a5 5 0 015 5v2"/></symbol>
-  <symbol id="i-spinner" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" d="M12 3a9 9 0 1 0 9 9"/></symbol>
-</svg>
 <!-- The two cross-fading layers live in a stage so pinch-zoom has something to
      transform that is not the images themselves: Ken Burns already owns their
      transform, and a zoom written there would fight the pan every frame. -->
@@ -49,117 +20,13 @@
 <div id="ytwrap"><div id="yt"></div></div>
 <div id="pulse"></div>
 <div id="cap"></div>
-<!-- The subtitle, and the way to open it out. #zoom only appears while there
-     are words to open — a button onto an empty transcript is a broken promise. -->
-<!-- The bottom half's own tap surface, sitting behind the words and filling
-     the whole reserved strip. Without it a tap that lands in the band but
-     misses the text itself falls through to the canvas and walks the mode ring
-     — so the bottom split behaved exactly like the top, which is not what a
-     strip full of words should do. -->
-<div id="bandhit"></div>
+<!-- The sentence being spoken. The one follow-along the wall keeps: reading a
+     whole reply, replying to it and driving the session are Sasonica's. -->
 <div id="sub"></div>
-<button id="zoom" type="button" title="Whole reply" aria-label="Whole reply">
-  <!-- Lines of text, not the four-corner "fit" brackets this used at first.
-       Those are the fit toggle's own icon, elsewhere on this same page, so
-       the door onto the transcript was wearing another control's clothes and
-       read as "fullscreen". Nobody would press it looking for words. -->
-  <svg viewBox="0 0 24 24" width="20" height="20"><use href="#i-book"/></svg>
-</button>
-<!-- The whole reply, scrollable, the live sentence lit. Ahead of the voice is
-     masked rather than absent: reading on is a deliberate scroll, never
-     something the eye does by accident while listening. -->
-<!-- The divider between the picture and the words. Only while both are on
-     screen — there is nothing to divide otherwise. -->
-<div id="split" hidden><span></span></div>
-<div id="tx" hidden>
-  <div id="txlines"></div>
-  <!-- What is still being worked on, at the foot of what has been said. The
-       transcript is where you look when the voice stops; this answers the
-       question that stopping raises. -->
-  <!-- The same pulsing "thinking" line Sasonica shows at the foot of a
-       conversation, mirrored here: dots that breathe while a reply is being
-       worked on, with who/how-many beside them. -->
-  <div id="txwork" hidden>
-    <span class="tdots" aria-hidden="true"><i></i><i></i><i></i></span>
-    <span id="txworkt"></span>
-  </div>
-  <button id="txlive" type="button" hidden>Back to the voice</button>
-  <button id="txclose" type="button" aria-label="Close">
-    <svg viewBox="0 0 24 24" width="22" height="22"><use href="#i-close"/></svg>
-  </button>
-</div>
 <div id="fig">▣ figure</div>
 <div id="dot" title="disconnected"></div>
 <div id="offbar"><div class="msg">reconnecting…</div></div>
 <div id="toast"></div>
-<div id="agents"></div>
-<div id="peek"></div>
-<div id="sheet"><div class="card">
-  <div class="sh" id="sheettitle"></div>
-  <input id="sheetin" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
-  <div class="btns">
-    <button class="cancel" id="sheetcancel">cancel</button>
-    <button class="ok" id="sheetok">OK</button>
-  </div>
-</div></div>
-<div id="inp">
-  <button id="target"></button>
-  <textarea id="text" rows="1" autocomplete="off" enterkeyhint="send"
-            placeholder="reply…"></textarea>
-  <button id="send"></button>
-</div>
-<div id="ctl">
-  <div class="row">
-    <button id="chan"></button>
-    <div id="marq"><span id="title">agent-media</span></div>
-    <span id="clock">○</span>
-    <button id="kbd"></button>
-    <button id="cc"></button>
-    <button id="fit"></button>
-    <button id="sfx"></button>
-    <button id="xbtn"></button>
-  </div>
-  <!-- Transport + volume/speed/mute share one row (the clock lives up top,
-       which is what made this fit a phone panel). #vdn's auto margin splits
-       the transport cluster (left) from the volume cluster (right). -->
-  <div class="row">
-    <button id="prev"></button>
-    <button id="skb"></button>
-    <button id="pp"></button>
-    <button id="skf"></button>
-    <button id="next"></button>
-    <button id="vdn"></button>
-    <button id="vup"></button>
-    <button id="sdn" class="sp"></button>
-    <button id="sup" class="sp"></button>
-    <button id="mute" class="sp"></button>
-  </div>
-</div>
-<div id="help">
-  <div class="hh">canvas keys · Tab / tap: passive→input→agents→control→… · Esc / q → passive</div>
-  <div class="hg">
-    <b>Space</b><span>play / pause</span>
-    <b>h · l</b><span>sentence −/+ (music/book: seek ∓5s)</span>
-    <b>H · L</b><span>paragraph −/+ (music/book: seek ∓30s)</span>
-    <b>&lt; · &gt;</b><span>prev / next</span>
-    <b>− · =</b><span>volume −/+</span>
-    <b>[ · ]</b><span>speed −/+  ·  0 / ⌫ reset</span>
-    <b>r · p</b><span>replay last · clip at cursor  (speech)</span>
-    <b>m · M</b><span>mute · keep-muted 🔒  (speech)</span>
-    <b>v</b><span>highlight follow-along  (speech)</span>
-    <b>g</b><span>go to source pane</span>
-    <b>s · o</b><span>typed seek · open URL  (music/book)</span>
-    <b>/</b><span>search  (music/book)</span>
-    <b>w</b><span>web UI  (music/book)</span>
-    <b>n</b><span>next channel  (in control)</span>
-    <b>c · f</b><span>captions · sound fx</span>
-    <b>Enter</b><span>reply input</span>
-    <b>a</b><span>agent tree: j/k move · l reply/open · h close · g/G ends · p peek · q exit</span>
-    <b>z</b><span>whole reply — scroll past the voice to read ahead</span>
-    <b>pinch</b><span>on the words: reading size · anywhere else: zoom the picture (double-tap resets)</span>
-    <b>?</b><span>this help</span>
-  </div>
-</div>
 <script>//__CANVAS_JS__</script>
 </body>
 </html>
