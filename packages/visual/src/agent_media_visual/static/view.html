@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- Unlike the canvas, this page does NOT take the pinch off the browser. The
+     canvas has its own zoom because it is a live surface with a caption and a
+     figure badge that must not scale with the picture; a viewer is one picture
+     and nothing else, and the browser's own pinch is better than anything
+     worth writing here. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>agent-media picture</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; }
+  html.eink, html.eink body { background: #fff; }
+  /* The whole picture, never cropped: a figure's labels are the content, and
+     this page exists precisely because they were too small to read. */
+  #pic {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; background: inherit;
+  }
+  /* Same treatment as an SVG figure on the canvas: dark line art inverts to
+     black-on-white, photographs go grey rather than negative. */
+  html.eink #pic.inkable {
+    filter: invert(1) hue-rotate(180deg) grayscale(1) contrast(1.7);
+  }
+  html.eink #pic:not(.inkable) { filter: grayscale(1) contrast(1.35); }
+  /* The one control, in the corner the canvas puts it in, so the two pages
+     agree about where the button that fills the screen lives. */
+  #full {
+    position: fixed; top: max(10px, env(safe-area-inset-top)); right: 12px;
+    width: 44px; height: 44px; z-index: 10;
+    display: grid; place-items: center; padding: 0; cursor: pointer;
+    border: 0; border-radius: 12px; color: #eee;
+    background: rgba(10,10,10,.55); backdrop-filter: blur(10px);
+    opacity: 0; pointer-events: none; transition: opacity .35s ease;
+  }
+  #full.on { opacity: .85; pointer-events: auto; }
+  #full:hover, #full:focus-visible { opacity: 1; }
+  #full:active { background: rgba(255,255,255,.16); }
+  #full .fs-out, body.fullscreen #full .fs-in { display: none; }
+  body.fullscreen #full .fs-out { display: inline; }
+  html.eink #full {
+    background: #fff; color: #000; border: 1.5px solid #000;
+    backdrop-filter: none; transition: none;
+  }
+  html.eink #full.on { opacity: 1; }
+</style>
+</head>
+<body>
+<img id="pic" alt="">
+<button id="full" type="button" title="Fullscreen" aria-label="Fullscreen">
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"
+       fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round">
+    <path class="fs-in"  d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>
+    <path class="fs-out" d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5"/>
+  </svg>
+</button>
+<script>
+  // The picture is the URL this page was served at. No substitution, no
+  // escaping question: ?raw=1 is the same address with the viewer declined,
+  // so the <img> gets the bytes and the navigation got the page.
+  const pic = document.getElementById('pic');
+  const src = location.pathname + '?raw=1';
+  pic.src = src;
+  pic.classList.toggle('inkable', /\.svg$/i.test(location.pathname));
+  // Same origin as the canvas, so the e-ink preference set there — by ?eink=1
+  // on the wall page — is already ours. A Pine Note that has said it is ink
+  // should not be handed a black page by a different door.
+  try { if (localStorage.getItem('eink') === '1')
+          document.documentElement.classList.add('eink'); } catch (_) {}
+
+  // ---- fullscreen, and landscape with it -----------------------------------
+  // The reason this page exists. A figure is drawn wide and a phone is held
+  // tall, so the picture that arrived here as a thumbnail under a message is
+  // still only a band across the middle. Fullscreen plus a landscape lock is
+  // the whole of the fix, and it is one tap because a browser will not give
+  // either without a gesture — a page cannot fullscreen itself on load, however
+  // much it would like to.
+  const ROOT = document.documentElement;
+  const req = ROOT.requestFullscreen || ROOT.webkitRequestFullscreen;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  const btn = document.getElementById('full');
+  const isFull = () =>
+    !!(document.fullscreenElement || document.webkitFullscreenElement);
+  const eink = () => ROOT.classList.contains('eink');
+  if (!req || document.fullscreenEnabled === false) btn.remove();
+
+  let hideTimer = null;
+  function reveal() {
+    if (!btn.isConnected) return;
+    btn.classList.add('on');
+    clearTimeout(hideTimer);
+    // Longer than the canvas's four seconds: there, the button is an
+    // afterthought on a picture you are watching; here it is what you came for.
+    hideTimer = setTimeout(() => btn.classList.remove('on'), 6000);
+  }
+  function draw() {
+    if (!btn.isConnected) return;
+    const on = isFull();
+    document.body.classList.toggle('fullscreen', on);
+    btn.title = on ? 'Leave fullscreen' : 'Fullscreen';
+    btn.setAttribute('aria-label', btn.title);
+    // Off the STATE, not the button: Back and Esc leave fullscreen without
+    // touching it, and a phone left locked landscape by those has simply
+    // stopped turning as far as its owner is concerned.
+    if (on) {
+      // Withheld on e-ink for the reason every other motion is: DU4 does not
+      // move, and rotating the screen is the largest movement there is.
+      if (!eink() && screen.orientation && screen.orientation.lock) {
+        try {
+          const r = screen.orientation.lock('landscape');
+          if (r && r.catch) r.catch(() => {});   // a desktop refuses; no matter
+        } catch (_) {}
+      }
+    } else if (screen.orientation && screen.orientation.unlock) {
+      try { screen.orientation.unlock(); } catch (_) {}
+    }
+    reveal();
+  }
+  if (btn.isConnected) {
+    btn.addEventListener('click', async () => {
+      const want = !isFull();
+      try {
+        if (want) await req.call(ROOT);
+        else if (exit) await exit.call(document);
+      } catch (_) {}
+      draw();
+    });
+    for (const ev of ['fullscreenchange', 'webkitfullscreenchange'])
+      document.addEventListener(ev, draw);
+    for (const ev of ['pointerdown', 'mousemove', 'keydown'])
+      document.addEventListener(ev, reveal, { passive: true });
+    reveal();
+  }
+</script>
+</body>
+</html>

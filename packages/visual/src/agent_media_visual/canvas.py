@@ -1281,6 +1281,18 @@ def _page() -> str:
 
 PAGE = _page()
 
+# The picture on its own, for when one is tapped rather than watched: full
+# screen, and landscape with it. Small enough to stay one file — it has no SSE,
+# no state and no channel, and splitting three files off a single <img> and one
+# button would be filing for its own sake.
+def _view_page() -> str:
+    from importlib import resources
+    return ((resources.files(__package__) / "static" / "view.html")
+            .read_text(encoding="utf-8"))
+
+
+VIEW_PAGE = _view_page()
+
 # What THIS page is, so a screen can tell it is holding an old one.
 #
 # The page is assembled once at import, which is the right trade for serving it
@@ -1529,7 +1541,7 @@ class Handler(BaseHTTPRequestHandler):
                 channel = "speech"
             self._json(200, channel_status(channel))
         elif path.startswith("/img/"):
-            self._image(path[len("/img/"):])
+            self._image(path[len("/img/"):], query)
         elif path.startswith("/persona/"):
             self._persona(path[len("/persona/"):])
         else:
@@ -1556,11 +1568,43 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _image(self, name: str) -> None:
+    def _wants_viewer(self, query: str) -> bool:
+        """Is this a person navigating to the picture, or a page loading it?
+
+        The same URL has to answer both. Sasonica shows the picture under a
+        message as an ``<img>`` and opens the very same address in the browser
+        when it is tapped — so the address that must return bytes to the chat
+        must return a page to the tap, and neither end can be asked to know
+        which is which.
+
+        ``Sec-Fetch-Dest`` is exactly that question, asked by the browser and
+        not forgeable by the page: ``document`` for a top-level navigation,
+        ``image`` for an ``<img>``. Where it is absent (curl, an old client, a
+        native HTTP plugin) the answer is bytes — the behaviour this route has
+        always had. A viewer is an improvement on a tap, never a condition of
+        the picture loading, so every ambiguous case falls to the raw file.
+
+        ``?raw=1`` declines the viewer outright (it is how the viewer page asks
+        for its own picture) and ``?view=1`` asks for it, so a link can be
+        deliberate without relying on a header at all.
+        """
+        q = parse_qs(query)
+        if q.get("raw"):
+            return False
+        if q.get("view"):
+            return True
+        return self.headers.get("Sec-Fetch-Dest", "").lower() == "document"
+
+    def _image(self, name: str, query: str = "") -> None:
         name = os.path.basename(name)  # no traversal
         f = spool_dir() / name
         if not f.is_file():
             self._send(404, b"no such image\n", "text/plain")
+            return
+        if self._wants_viewer(query):
+            # The viewer reads the picture off its own address, so there is
+            # nothing to substitute into it and nothing to escape.
+            self._send(200, VIEW_PAGE.encode(), "text/html; charset=utf-8")
             return
         data = f.read_bytes()
         ctype = "image/webp" if name.endswith(".webp") else \
