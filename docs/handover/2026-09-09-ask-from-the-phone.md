@@ -45,6 +45,16 @@ sends nothing. `GET /conversations` is the picker's list (`/sessions` was
 already amux's). The answer carries `mode` (new/continued), `how`, `title`,
 and `item` when the library has it.
 
+**Status, not membership (evening).** A conversation whose session has a
+pane carries the ABS tag `live` (`book_tracks.sync_live_tags`, applied on
+publish and on the half-hourly `media feed tracks` sweep; `live_session_ids`
+reads the pane registry). A closed session stays in its series. Sasonica's
+home page opens with a **Live** shelf (`filter=tags.<base64 live>`), a
+conversation's title row shows a green dot while it runs, and its "more"
+menu has **Resume session** (`POST /session/resume`: the reply revive without
+a reply), **Close session** (`POST /session/close`: kills the pane hosting
+that session, nothing else) and **Go to terminal** (`/focus`).
+
 ## Four things learned the hard way
 
 - **A tmux session made from under systemd has no `claude` on its PATH.**
