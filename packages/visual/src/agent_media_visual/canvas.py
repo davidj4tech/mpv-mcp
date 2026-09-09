@@ -1300,6 +1300,28 @@ PAGE = _page()
 PAGE_ID = hashlib.sha256(PAGE.encode()).hexdigest()[:12]
 
 
+# The endpoints a browser on another origin may reach. Everything here
+# carries its own credential — the caller's Audiobookshelf bearer, handed back
+# to ABS to ask who they are — and none of it is reachable with the ambient
+# authority a browser attaches by itself, so opening them to any origin gives
+# a drive-by page nothing it did not already have. The token-guarded routes
+# (/input, /show, /ctl, /say, /play) are deliberately NOT here: their
+# credential is ours, not the caller's, and CORS is what keeps a page you
+# happen to be visiting from spending it.
+#
+# Needed because the web client is served from a different port than the
+# canvas (Audiobookshelf on :13379, this on :8781). The Capacitor app never
+# needed it — a native HTTP client is not subject to the same-origin policy.
+_CORS_PATHS = frozenset({
+    "/conversation", "/conversation/log", "/conversations", "/item",
+    "/reply", "/ask", "/focus", "/session/resume", "/session/close",
+})
+
+# Long enough that a chat page's polling is not preceded by a preflight every
+# time; short enough that a change here is picked up the same day.
+_CORS_MAX_AGE = "3600"
+
+
 # Cap request bodies: an unbounded Content-Length (e.g. 5 GB) would force a
 # multi-GB read/alloc — a trivial remote OOM on a RAM-tight host (#139).
 _MAX_BODY = 64 * 1024
@@ -1312,13 +1334,42 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("MEDIA_VISUAL_DEBUG") == "1":
             super().log_message(fmt, *args)
 
+    def _cors(self) -> None:
+        """Allow a browser on another origin, on the bearer-authed routes only.
+
+        `*` rather than the caller's origin, and no Allow-Credentials: the
+        credential is the Authorization header the client sets by hand, so the
+        browser never attaches anything of its own to these.
+        """
+        if self.path.split("?", 1)[0] not in _CORS_PATHS:
+            return
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Expose-Headers", "Content-Encoding")
+
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._cors()
         self.end_headers()
         self.wfile.write(body)
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        """CORS preflight. Anything not on the list is simply not allowed."""
+        path = self.path.split("?", 1)[0]
+        if path not in _CORS_PATHS:
+            self.send_response(405)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", _CORS_MAX_AGE)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _json(self, code: int, obj: dict) -> None:
         self._send(code, json.dumps(obj).encode(), "application/json")
@@ -1342,6 +1393,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(packed)))
             self.send_header("Cache-Control", "no-store")
+            self._cors()
             self.end_headers()
             self.wfile.write(packed)
             return
